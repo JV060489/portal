@@ -18,11 +18,13 @@ export const auth = betterAuth({
     enabled: true,
   },
   socialProviders: {
+  ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && {
     google: {
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     },
-  },
+  }),
+},
   plugins: [
     username(),
     nextCookies(),
