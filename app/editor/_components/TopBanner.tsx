@@ -2,6 +2,7 @@
 
 import { useSession, signOut } from "@/lib/auth-client";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
 
 export default function TopBanner() {
   const { data: session, isPending } = useSession();
@@ -19,13 +20,14 @@ export default function TopBanner() {
           ? "Loading..."
           : `Welcome, ${session?.user?.username ?? "User"}`}
       </span>
-      <button
+      <Button
+        variant="outline"
+        size="sm"
         onClick={handleSignOut}
-        className="rounded-md bg-neutral-800 px-3 py-1 text-sm text-neutral-300 transition-colors
-        border-red-400 hover:bg-neutral-700 cursor-pointer"
+        className="bg-neutral-800 border-neutral-700 text-neutral-300 hover:bg-neutral-700 h-7 text-xs"
       >
         Logout
-      </button>
+      </Button>
     </div>
   );
 }

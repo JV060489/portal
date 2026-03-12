@@ -32,7 +32,6 @@ Portal consists of two main systems connected by a real-time sync layer:
 
 ### Cloud / Infra
 - **Database:** MongoDB Atlas
-- **Sync Storage:** AWS DynamoDB (planned)
 - **Deployment:** Vercel (planned)
 
 ## Project Structure

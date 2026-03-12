@@ -123,6 +123,16 @@ body {
 
 }
 
+@utility scrollbar-hide {
+  /* The standard (Firefox, Modern Safari) */
+  scrollbar-width: none;
+
+  /* The legacy/Blink fallback (Chrome, Edge, Opera) */
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
