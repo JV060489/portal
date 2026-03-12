@@ -308,20 +308,42 @@ export default function Projects() {
     if (!deleteTarget) return;
     const { id, isProject, projectId } = deleteTarget;
 
-    if (isProject) {
-      await fetch(`/api/projects/${id}`, { method: "DELETE" });
-      setProjects((prev) => prev.filter((p) => p.id !== id));
-    } else if (projectId) {
-      await fetch(`/api/projects/${projectId}/scenes/${id}`, {
-        method: "DELETE",
-      });
-      setProjects((prev) =>
-        prev.map((p) =>
-          p.id === projectId
-            ? { ...p, scenes: p.scenes.filter((s) => s.id !== id) }
-            : p,
-        ),
-      );
+    let deleted = false;
+
+    try {
+      if (isProject) {
+        const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
+        if (res.ok) {
+          setProjects((prev) => prev.filter((p) => p.id !== id));
+          deleted = true;
+        }
+      } else if (projectId) {
+        const res = await fetch(
+          `/api/projects/${projectId}/scenes/${id}`,
+          {
+            method: "DELETE",
+          },
+        );
+        if (res.ok) {
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId
+                ? { ...p, scenes: p.scenes.filter((s) => s.id !== id) }
+                : p,
+            ),
+          );
+          deleted = true;
+        }
+      }
+    } catch (error) {
+      console.error("Failed to delete item:", error);
+    }
+
+    if (!deleted) {
+      if (typeof window !== "undefined") {
+        window.alert("Failed to delete. Please try again.");
+      }
+      return;
     }
     setDeleteTarget(null);
   }

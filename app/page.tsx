@@ -6,16 +6,16 @@ export default function Page() {
     <header className='flex items-center justify-center h-screen flex-col gap-4'>
       <h1 className='text-4xl'>Portal</h1>
       <div className='flex gap-3'>
-        <Link href="/sign-in">
-          <Button className='rounded-full px-6 bg-blue-500 hover:bg-blue-600 text-white'>
+        <Button asChild className='rounded-full px-6 bg-blue-500 hover:bg-blue-600 text-white'>
+          <Link href="/sign-in">
             Sign In
-          </Button>
-        </Link>
-        <Link href="/sign-up">
-          <Button variant="outline" className='rounded-full px-6 border-blue-500'>
+          </Link>
+        </Button>
+        <Button asChild variant="outline" className='rounded-full px-6 border-blue-500'>
+          <Link href="/sign-up">
             Sign Up
-          </Button>
-        </Link>
+          </Link>
+        </Button>
       </div>
       <p className='text-xl text-gray-500'>
         3D Codex for Designers
