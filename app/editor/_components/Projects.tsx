@@ -310,12 +310,22 @@ export default function Projects() {
 
     let deleted = false;
 
+    // Determine if the user is currently viewing the item being deleted
+    const activeProjectId =
+      pathParts.length >= 3 && pathParts[1] === "editor"
+        ? pathParts[2]
+        : null;
+
     try {
       if (isProject) {
         const res = await fetch(`/api/projects/${id}`, { method: "DELETE" });
         if (res.ok) {
           setProjects((prev) => prev.filter((p) => p.id !== id));
           deleted = true;
+          // If user was viewing any scene in this project, navigate away
+          if (activeProjectId === id) {
+            router.push("/editor");
+          }
         }
       } else if (projectId) {
         const res = await fetch(
@@ -333,6 +343,10 @@ export default function Projects() {
             ),
           );
           deleted = true;
+          // If user was viewing this specific scene, navigate away
+          if (activeSceneId === id) {
+            router.push("/editor");
+          }
         }
       }
     } catch (error) {
