@@ -3,40 +3,32 @@
 import { signUp, signIn } from "@/lib/auth-client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function SignUpPage() {
   const router = useRouter();
-  const [name, setName] = useState("");
-  const [username, setUsername] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
+  const [error, submitAction, isPending] = useActionState<
+    string | null,
+    FormData
+  >(async (_prevState, formData) => {
+    const name = formData.get("name") as string;
+    const username = formData.get("username") as string;
+    const email = formData.get("email") as string;
+    const password = formData.get("password") as string;
 
-    const { error } = await signUp.email({
-      name,
-      username,
-      email,
-      password,
-    });
+    const { error } = await signUp.email({ name, username, email, password });
 
     if (error) {
-      setError(error.message ?? "Something went wrong");
-      setLoading(false);
-      return;
+      return error.message ?? "Something went wrong";
     }
 
     router.push("/editor");
-  }
+    return null;
+  }, null);
 
   async function handleGoogleSignIn() {
     await signIn.social({
@@ -76,14 +68,13 @@ export default function SignUpPage() {
           <div className="h-px flex-1 bg-neutral-800" />
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form action={submitAction} className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
             <Input
               id="name"
+              name="name"
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
               required
               className="border-neutral-700 bg-neutral-900"
             />
@@ -93,9 +84,8 @@ export default function SignUpPage() {
             <Label htmlFor="username">Username</Label>
             <Input
               id="username"
+              name="username"
               type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
               required
               className="border-neutral-700 bg-neutral-900"
             />
@@ -105,9 +95,8 @@ export default function SignUpPage() {
             <Label htmlFor="email">Email</Label>
             <Input
               id="email"
+              name="email"
               type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
               required
               className="border-neutral-700 bg-neutral-900"
             />
@@ -117,9 +106,8 @@ export default function SignUpPage() {
             <Label htmlFor="password">Password</Label>
             <Input
               id="password"
+              name="password"
               type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
               required
               minLength={8}
               className="border-neutral-700 bg-neutral-900"
@@ -130,8 +118,8 @@ export default function SignUpPage() {
             <p className="text-sm text-red-400">{error}</p>
           )}
 
-          <Button type="submit" disabled={loading} className="w-full">
-            {loading ? "Creating account..." : "Sign up"}
+          <Button type="submit" disabled={isPending} className="w-full">
+            {isPending ? "Creating account..." : "Sign up"}
           </Button>
         </form>
 

@@ -3,7 +3,7 @@ export default function EditorPage() {
     <div className="flex-1 flex items-center justify-center">
       <div className="text-center space-y-3">
         <svg
-          className="w-12 h-12 mx-auto text-neutral-700"
+          className="w-12 h-12 mx-auto text-blue-500"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
