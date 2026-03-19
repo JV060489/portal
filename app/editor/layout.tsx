@@ -9,9 +9,11 @@ export default function EditorLayout({
     return (
         <section className="h-screen flex flex-col">
             <TopBanner />
-            <div className="flex flex-1 overflow-hidden">
+            <div className="flex flex-1 min-h-0 overflow-hidden">
                 <Projects />
-                {children}
+                <div className="flex-1 min-w-0 min-h-0">
+                    {children}
+                </div>
             </div>
         </section>
     )

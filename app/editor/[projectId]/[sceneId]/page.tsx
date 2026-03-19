@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma"
 import { getUser } from "@/lib/auth-session"
 import { notFound } from "next/navigation"
 import SceneCanvas from "./SceneCanvas"
+import { YjsProvider } from "@/lib/yjs/provider"
 
 export default async function CanvasPage({
     params,
@@ -20,11 +21,8 @@ export default async function CanvasPage({
     if (!scene) notFound()
 
     return (
-        <SceneCanvas
-            sceneName={scene.name}
-            projectId={projectId}
-            sceneId={sceneId}
-            initialData={scene.globalData as Record<string, unknown>}
-        />
+        <YjsProvider sceneId={sceneId}>
+            <SceneCanvas sceneName={scene.name} />
+        </YjsProvider>
     )
 }

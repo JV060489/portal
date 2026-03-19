@@ -16,6 +16,7 @@ export type TreeNode = {
   id: string;
   name: string;
   isProject?: boolean;
+  isPending?: boolean;
   projectId?: string;
   children?: TreeNode[];
 };
@@ -32,7 +33,6 @@ function RenameInput({
   const inputRef = useRef<HTMLInputElement>(null);
   const hasFocusedRef = useRef(false);
   const userInteractedRef = useRef(false);
-  const focusedAtRef = useRef(0);
   const shouldGuardEarlyBlurRef = useRef(suppressInitialBlurSubmit);
 
   useEffect(() => {
@@ -52,21 +52,14 @@ function RenameInput({
     <Input
       ref={inputRef}
       defaultValue={node.data.name}
-      className="h-5 text-sm bg-neutral-800 border-neutral-600 px-1 py-0 text-white focus-visible:ring-0 focus-visible:border-neutral-600"
+      className="h-5 text-sm bg-neutral-800 border-none px-1 py-0 text-white focus-visible:ring-0 outline-none shadow-none"
       onFocus={() => {
-        focusedAtRef.current = Date.now();
+        hasFocusedRef.current = true;
       }}
       onBlur={(e) => {
         if (!hasFocusedRef.current) return;
 
-        const elapsedSinceFocus = Date.now() - focusedAtRef.current;
-        const shouldIgnoreEarlyBlur =
-          shouldGuardEarlyBlurRef.current &&
-          !userInteractedRef.current &&
-          elapsedSinceFocus < 150;
-
-        if (shouldIgnoreEarlyBlur) {
-          shouldGuardEarlyBlurRef.current = false;
+        if (shouldGuardEarlyBlurRef.current && !userInteractedRef.current) {
           requestAnimationFrame(() => {
             inputRef.current?.focus();
             inputRef.current?.select();
@@ -119,6 +112,7 @@ export function TreeNodeRow({
   const isEditing = node.isEditing;
   const isPlaceholder =
     node.id === "__new-project__" || node.id === "__new-scene__";
+  const isPending = node.data.isPending === true;
   const pendingRenameRef = useRef(false);
   const [renameFromContextMenu, setRenameFromContextMenu] = useState(false);
 
@@ -184,13 +178,26 @@ export function TreeNodeRow({
     );
   }
 
+  if (isPending) {
+    return (
+      <div
+        ref={dragHandle}
+        style={style}
+        className="flex items-center gap-2 px-3 py-1.5 mx-2 my-0.5 rounded-lg animate-pulse"
+      >
+        <div className="w-3.5 h-3.5 shrink-0 rounded bg-neutral-700" />
+        <div className="h-3.5 flex-1 rounded bg-neutral-700" />
+      </div>
+    );
+  }
+
   const rowContent = (
     <div
       ref={dragHandle}
       style={style}
       className={`
         flex items-center gap-2 px-3 py-1.5 mx-2 my-0.5 rounded-lg cursor-pointer select-none
-        transition-all duration-150 group
+        transition-all duration-150 group outline-none
         ${isSelected ? "bg-blue-500/15 text-blue-400" : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"}
       `}
       onClick={() => {

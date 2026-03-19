@@ -1,203 +1,683 @@
 "use client"
 
 import { Canvas, useThree, useFrame } from "@react-three/fiber"
-import { Grid, OrbitControls, TransformControls } from "@react-three/drei"
-import { useRef, useState, useCallback, useEffect } from "react"
+import { Grid, OrbitControls, TransformControls, Outlines } from "@react-three/drei"
+import { useRef, useState, useCallback, useEffect, useMemo } from "react"
 import { useControls, useStoreContext, LevaPanel, LevaStoreProvider, useCreateStore } from "leva"
 import * as THREE from "three"
-
-type Vec3 = [number, number, number]
-
-type SceneState = {
-    camera: { position: Vec3; target: Vec3 }
-    cube: { position: Vec3; rotation: Vec3; scale: Vec3 }
-}
-
-const DEFAULT_STATE: SceneState = {
-    camera: { position: [5, 4, 5], target: [0, 0, 0] },
-    cube: { position: [0, 0.5, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
-}
-
-function parseInitialData(data: Record<string, unknown>): SceneState {
-    const d = data as Partial<SceneState>
-    return {
-        camera: {
-            position: d.camera?.position ?? DEFAULT_STATE.camera.position,
-            target: d.camera?.target ?? DEFAULT_STATE.camera.target,
-        },
-        cube: {
-            position: d.cube?.position ?? DEFAULT_STATE.cube.position,
-            rotation: d.cube?.rotation ?? DEFAULT_STATE.cube.rotation,
-            scale: d.cube?.scale ?? DEFAULT_STATE.cube.scale,
-        },
-    }
-}
+import * as Y from "yjs"
+import { useYjs } from "@/lib/yjs/provider"
+import { useYjsObject, useYjsCamera, useYjsObjects, useYjsBatchDelete, buildChildrenMap } from "@/lib/yjs/hooks"
+import type { SceneObjectData } from "@/lib/yjs/types"
+import SceneObjectTree from "./_components/SceneObjectTree"
 
 function toDeg(rad: number) { return rad * (180 / Math.PI) }
 function toRad(deg: number) { return deg * (Math.PI / 180) }
 
-function CameraSync({
-    onCameraChange,
-    initialTarget,
-    cameraRef,
-    orbitTargetRef,
-}: {
-    onCameraChange: () => void
-    initialTarget: Vec3
-    cameraRef: React.RefObject<THREE.Camera | null>
-    orbitTargetRef: React.RefObject<THREE.Vector3 | null>
-}) {
+type TransformMode = "translate" | "rotate" | "scale"
+type AxisConstraint = "none" | "x" | "y" | "z"
+
+// ---------------------------------------------------------------------------
+// ObjectGeometry — renders the correct geometry based on type
+// ---------------------------------------------------------------------------
+
+function ObjectGeometry({ geometry }: { geometry: string }) {
+    switch (geometry) {
+        case "sphere":       return <sphereGeometry args={[0.5, 32, 16]} />
+        case "cylinder":     return <cylinderGeometry args={[0.5, 0.5, 1, 32]} />
+        case "cone":         return <coneGeometry args={[0.5, 1, 32]} />
+        case "torus":        return <torusGeometry args={[0.5, 0.2, 16, 32]} />
+        case "plane":        return <planeGeometry args={[1, 1]} />
+        case "circle":       return <circleGeometry args={[0.5, 32]} />
+        case "icosahedron":  return <icosahedronGeometry args={[0.5, 0]} />
+        case "box": default: return <boxGeometry args={[1, 1, 1]} />
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CameraSync — reads/writes camera state via YJS
+// ---------------------------------------------------------------------------
+
+function CameraSync() {
     const { camera } = useThree()
     const controlsRef = useRef<React.ComponentRef<typeof OrbitControls>>(null)
+    const { writeCamera, observeCamera, readCamera, isApplyingRemote } = useYjsCamera()
+    const { synced } = useYjs()
+    const initialized = useRef(false)
 
     useEffect(() => {
-        cameraRef.current = camera
-    }, [camera, cameraRef])
+        if (!synced || initialized.current) return
+        const cam = readCamera()
+        if (!cam) return
 
-    useEffect(() => {
+        camera.position.set(cam.px, cam.py, cam.pz)
         if (controlsRef.current) {
-            controlsRef.current.target.set(...initialTarget)
+            controlsRef.current.target.set(cam.tx, cam.ty, cam.tz)
             controlsRef.current.update()
-            orbitTargetRef.current = controlsRef.current.target
         }
-    }, [initialTarget, orbitTargetRef])
+        initialized.current = true
+    }, [synced, readCamera, camera])
+
+    useEffect(() => {
+        if (!synced) return
+
+        return observeCamera((changes) => {
+            if (changes.px !== undefined || changes.py !== undefined || changes.pz !== undefined) {
+                camera.position.set(
+                    changes.px ?? camera.position.x,
+                    changes.py ?? camera.position.y,
+                    changes.pz ?? camera.position.z,
+                )
+            }
+            if (controlsRef.current && (changes.tx !== undefined || changes.ty !== undefined || changes.tz !== undefined)) {
+                const t = controlsRef.current.target
+                controlsRef.current.target.set(
+                    changes.tx ?? t.x,
+                    changes.ty ?? t.y,
+                    changes.tz ?? t.z,
+                )
+                controlsRef.current.update()
+            }
+        })
+    }, [synced, observeCamera, camera])
+
+    const handleCameraEnd = () => {
+        if (isApplyingRemote.current) return
+        const target = controlsRef.current?.target
+        writeCamera({
+            px: camera.position.x,
+            py: camera.position.y,
+            pz: camera.position.z,
+            tx: target?.x ?? 0,
+            ty: target?.y ?? 0,
+            tz: target?.z ?? 0,
+        })
+    }
 
     return (
         <OrbitControls
             ref={controlsRef}
             makeDefault
-            onEnd={onCameraChange}
+            onEnd={handleCameraEnd}
         />
     )
 }
 
-function CubeWithControls({
-    initialPosition,
-    initialRotation,
-    initialScale,
-    onTransformChange,
-    meshRef,
+// ---------------------------------------------------------------------------
+// SceneObject — a single YJS-synced 3D object rendered as a <group>.
+//
+// LOCAL transforms from YJS are applied to the group. Children are rendered
+// as nested SceneObjects inside the group, so Three.js scene graph nesting
+// handles world-space positioning automatically — no manual propagation.
+// ---------------------------------------------------------------------------
+
+function SceneObject({
+    objectId,
+    childIds,
+    isSelected,
+    isPrimary,
+    onSelect,
+    onGroupReady,
+    allSelectedIds,
+    allPrimaryId,
+    allChildrenMap,
+    onGroupReadyMap,
 }: {
-    initialPosition: Vec3
-    initialRotation: Vec3
-    initialScale: Vec3
-    onTransformChange: () => void
-    meshRef: React.RefObject<THREE.Mesh | null>
+    objectId: string
+    childIds: string[]
+    isSelected: boolean
+    isPrimary: boolean
+    onSelect: (id: string, modifiers: { shiftKey: boolean; ctrlKey: boolean }) => void
+    onGroupReady: (id: string, group: THREE.Group | null) => void
+    allSelectedIds: Set<string>
+    allPrimaryId: string | null
+    allChildrenMap: Map<string, string[]>
+    onGroupReadyMap: (id: string, group: THREE.Group | null) => void
 }) {
-    const [meshObject, setMeshObject] = useState<THREE.Mesh | null>(null)
+    const groupRef = useRef<THREE.Group>(null)
+    const { observeObject, readObject } = useYjsObject(objectId)
+    const { synced } = useYjs()
+
+    // Read YJS state only once on mount for geometry/material
+    const [initial] = useState(() => readObject())
+    const materialColor = initial?.materialColor ?? "#4f8fff"
+
+    const setGroupRef = useCallback((node: THREE.Group | null) => {
+        groupRef.current = node
+        onGroupReady(objectId, node)
+        onGroupReadyMap(objectId, node)
+        // Apply current LOCAL YJS state imperatively on mount
+        if (node) {
+            const data = readObject()
+            if (data) {
+                node.position.set(data.px, data.py, data.pz)
+                node.rotation.set(data.rx, data.ry, data.rz)
+                node.scale.set(data.sx, data.sy, data.sz)
+            }
+        }
+    }, [objectId, onGroupReady, onGroupReadyMap, readObject])
+
+    // Observe remote Y.Doc changes → apply LOCAL transforms to group
+    useEffect(() => {
+        if (!synced) return
+
+        return observeObject((changes: Partial<SceneObjectData>) => {
+            const group = groupRef.current
+            if (!group) return
+
+            if (changes.px !== undefined || changes.py !== undefined || changes.pz !== undefined) {
+                group.position.set(
+                    changes.px ?? group.position.x,
+                    changes.py ?? group.position.y,
+                    changes.pz ?? group.position.z,
+                )
+            }
+            if (changes.rx !== undefined || changes.ry !== undefined || changes.rz !== undefined) {
+                group.rotation.set(
+                    changes.rx ?? group.rotation.x,
+                    changes.ry ?? group.rotation.y,
+                    changes.rz ?? group.rotation.z,
+                )
+            }
+            if (changes.sx !== undefined || changes.sy !== undefined || changes.sz !== undefined) {
+                group.scale.set(
+                    changes.sx ?? group.scale.x,
+                    changes.sy ?? group.scale.y,
+                    changes.sz ?? group.scale.z,
+                )
+            }
+        })
+    }, [synced, observeObject])
+
+    return (
+        <group ref={setGroupRef}>
+            {/* The actual mesh — at identity transform within the group */}
+            <mesh
+                onClick={(e) => {
+                    e.stopPropagation()
+                    onSelect(objectId, { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey })
+                }}
+            >
+                <ObjectGeometry geometry={initial?.geometry ?? "box"} />
+                <meshStandardMaterial color={materialColor} />
+                {isSelected && (
+                    <Outlines thickness={isPrimary ? 1.2 : 0.5} color="#ffffff" />
+                )}
+            </mesh>
+
+            {/* Children nested inside this group — they inherit parent transforms */}
+            {childIds.map((childId) => (
+                <SceneObject
+                    key={childId}
+                    objectId={childId}
+                    childIds={allChildrenMap.get(childId) ?? []}
+                    isSelected={allSelectedIds.has(childId)}
+                    isPrimary={childId === allPrimaryId}
+                    onSelect={onSelect}
+                    onGroupReady={onGroupReady}
+                    allSelectedIds={allSelectedIds}
+                    allPrimaryId={allPrimaryId}
+                    allChildrenMap={allChildrenMap}
+                    onGroupReadyMap={onGroupReadyMap}
+                />
+            ))}
+        </group>
+    )
+}
+
+// ---------------------------------------------------------------------------
+// SelectedObjectControls — Leva + TransformControls for the selected object
+//
+// With scene graph nesting, moving a parent automatically moves children.
+// No child propagation code needed — just write the selected object's
+// LOCAL transform to YJS.
+// ---------------------------------------------------------------------------
+
+function SelectedObjectControls({
+    objectId,
+    groupObject,
+    transformMode,
+    axisConstraint,
+}: {
+    objectId: string
+    groupObject: THREE.Group
+    transformMode: TransformMode
+    axisConstraint: AxisConstraint
+}) {
     const store = useStoreContext()
     const isDragging = useRef(false)
+    const isMounted = useRef(true)
+    const { writeTransform, readObject, isApplyingRemote } = useYjsObject(objectId)
+    const { synced } = useYjs()
+    const groupRef = useRef(groupObject)
 
-    const setRefs = useCallback((node: THREE.Mesh | null) => {
-        meshRef.current = node
-        setMeshObject(node)
-    }, [meshRef])
+    useEffect(() => {
+        isMounted.current = true
+        return () => { isMounted.current = false }
+    }, [])
 
-    // Leva controls for cube transform
-    const [, set] = useControls("Cube", () => ({
+    useEffect(() => {
+        groupRef.current = groupObject
+    }, [groupObject])
+
+    const initial = readObject()
+    const initPos = initial ? { x: initial.px, y: initial.py, z: initial.pz } : { x: 0, y: 0.5, z: 0 }
+    const initRot = initial ? { x: toDeg(initial.rx), y: toDeg(initial.ry), z: toDeg(initial.rz) } : { x: 0, y: 0, z: 0 }
+    const initScale = initial ? { x: initial.sx, y: initial.sy, z: initial.sz } : { x: 1, y: 1, z: 1 }
+    const objectName = initial?.name ?? "Object"
+
+    const [, set] = useControls(objectName, () => ({
         position: {
-            value: { x: initialPosition[0], y: initialPosition[1], z: initialPosition[2] },
+            value: initPos,
             step: 0.1,
             onChange: (v: { x: number; y: number; z: number }) => {
-                const mesh = meshRef.current
-                if (!mesh || isDragging.current) return
-                mesh.position.set(v.x, v.y, v.z)
-                onTransformChange()
+                const group = groupRef.current
+                if (!group || !isMounted.current || isDragging.current || isApplyingRemote.current) return
+                group.position.set(v.x, v.y, v.z)
+                writeTransform({ px: v.x, py: v.y, pz: v.z })
             },
         },
         rotation: {
-            value: { x: toDeg(initialRotation[0]), y: toDeg(initialRotation[1]), z: toDeg(initialRotation[2]) },
+            value: initRot,
             step: 1,
             onChange: (v: { x: number; y: number; z: number }) => {
-                const mesh = meshRef.current
-                if (!mesh || isDragging.current) return
-                mesh.rotation.set(toRad(v.x), toRad(v.y), toRad(v.z))
-                onTransformChange()
+                const group = groupRef.current
+                if (!group || !isMounted.current || isDragging.current || isApplyingRemote.current) return
+                group.rotation.set(toRad(v.x), toRad(v.y), toRad(v.z))
+                writeTransform({ rx: toRad(v.x), ry: toRad(v.y), rz: toRad(v.z) })
             },
         },
         scale: {
-            value: { x: initialScale[0], y: initialScale[1], z: initialScale[2] },
+            value: initScale,
             step: 0.1,
             min: 0.01,
             onChange: (v: { x: number; y: number; z: number }) => {
-                const mesh = meshRef.current
-                if (!mesh || isDragging.current) return
-                mesh.scale.set(v.x, v.y, v.z)
-                onTransformChange()
+                const group = groupRef.current
+                if (!group || !isMounted.current || isDragging.current || isApplyingRemote.current) return
+                group.scale.set(v.x, v.y, v.z)
+                writeTransform({ sx: v.x, sy: v.y, sz: v.z })
             },
         },
     }), { store })
 
-    // Sync mesh transform back to leva after TransformControls drag
+    // Observe remote changes → sync to Leva
+    const { observeObject } = useYjsObject(objectId)
+
+    useEffect(() => {
+        if (!synced) return
+
+        return observeObject(() => {
+            const group = groupRef.current
+            if (!group) return
+
+            set({
+                position: { x: group.position.x, y: group.position.y, z: group.position.z },
+                rotation: { x: toDeg(group.rotation.x), y: toDeg(group.rotation.y), z: toDeg(group.rotation.z) },
+                scale: { x: group.scale.x, y: group.scale.y, z: group.scale.z },
+            })
+        })
+    }, [synced, observeObject, set])
+
+    // During drag: sync group → Leva + write local transform to YJS
     useFrame(() => {
-        const mesh = meshRef.current
-        if (!mesh || !isDragging.current) return
+        const group = groupRef.current
+        if (!group || !isDragging.current) return
 
         set({
-            position: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z },
-            rotation: { x: toDeg(mesh.rotation.x), y: toDeg(mesh.rotation.y), z: toDeg(mesh.rotation.z) },
-            scale: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
+            position: { x: group.position.x, y: group.position.y, z: group.position.z },
+            rotation: { x: toDeg(group.rotation.x), y: toDeg(group.rotation.y), z: toDeg(group.rotation.z) },
+            scale: { x: group.scale.x, y: group.scale.y, z: group.scale.z },
+        })
+
+        // Only write THIS object's local transform — children follow via scene graph
+        writeTransform({
+            px: group.position.x, py: group.position.y, pz: group.position.z,
+            rx: group.rotation.x, ry: group.rotation.y, rz: group.rotation.z,
+            sx: group.scale.x, sy: group.scale.y, sz: group.scale.z,
         })
     })
 
+    const showX = axisConstraint === "none" || axisConstraint === "x"
+    const showY = axisConstraint === "none" || axisConstraint === "y"
+    const showZ = axisConstraint === "none" || axisConstraint === "z"
+
+    return (
+        <TransformControls
+            object={groupObject}
+            mode={transformMode}
+            showX={showX}
+            showY={showY}
+            showZ={showZ}
+            onMouseDown={() => {
+                isDragging.current = true
+            }}
+            onMouseUp={() => {
+                isDragging.current = false
+                const group = groupRef.current
+                if (group) {
+                    set({
+                        position: { x: group.position.x, y: group.position.y, z: group.position.z },
+                        rotation: { x: toDeg(group.rotation.x), y: toDeg(group.rotation.y), z: toDeg(group.rotation.z) },
+                        scale: { x: group.scale.x, y: group.scale.y, z: group.scale.z },
+                    })
+
+                    writeTransform({
+                        px: group.position.x, py: group.position.y, pz: group.position.z,
+                        rx: group.rotation.x, ry: group.rotation.y, rz: group.rotation.z,
+                        sx: group.scale.x, sy: group.scale.y, sz: group.scale.z,
+                    }, true)
+                }
+            }}
+        />
+    )
+}
+
+// ---------------------------------------------------------------------------
+// GroupTransformControls — TransformControls on median pivot for multi-select
+//
+// With local transforms, we only need to write transforms for "selection
+// roots" — selected objects whose parents are NOT also selected. Descendants
+// of selected objects follow automatically through the scene graph.
+// ---------------------------------------------------------------------------
+
+type GroupSnapshot = {
+    position: THREE.Vector3
+    quaternion: THREE.Quaternion
+    scale: THREE.Vector3
+}
+
+function GroupTransformControls({
+    selectedIds,
+    groupMap,
+    transformMode,
+    axisConstraint,
+}: {
+    selectedIds: Set<string>
+    groupMap: Record<string, THREE.Group>
+    transformMode: TransformMode
+    axisConstraint: AxisConstraint
+}) {
+    const [pivot] = useState(() => new THREE.Object3D())
+    const isDragging = useRef(false)
+    const snapshots = useRef<Map<string, GroupSnapshot>>(new Map())
+    const pivotSnapshot = useRef<THREE.Vector3>(new THREE.Vector3())
+    const pivotQuatSnapshot = useRef<THREE.Quaternion>(new THREE.Quaternion())
+    const pivotScaleSnapshot = useRef<THREE.Vector3>(new THREE.Vector3(1, 1, 1))
+    const { doc, sceneMap, connected } = useYjs()
+
+    const selectedArray = useMemo(() => [...selectedIds], [selectedIds])
+
+    // Compute world positions for pivot center using getWorldPosition
+    useEffect(() => {
+        if (selectedArray.length === 0) return
+
+        const center = new THREE.Vector3()
+        const worldPos = new THREE.Vector3()
+        let count = 0
+        for (const id of selectedArray) {
+            const group = groupMap[id]
+            if (group) {
+                group.getWorldPosition(worldPos)
+                center.add(worldPos)
+                count++
+            }
+        }
+        if (count > 0) center.divideScalar(count)
+
+        pivot.position.copy(center)
+        pivot.quaternion.identity()
+        pivot.scale.set(1, 1, 1)
+    }, [selectedArray, groupMap, pivot])
+
+    const handleDragStart = useCallback(() => {
+        isDragging.current = true
+
+        pivotSnapshot.current.copy(pivot.position)
+        pivotQuatSnapshot.current.copy(pivot.quaternion)
+        pivotScaleSnapshot.current.copy(pivot.scale)
+
+        // Snapshot world positions of all selected objects
+        snapshots.current.clear()
+        const worldPos = new THREE.Vector3()
+        const worldQuat = new THREE.Quaternion()
+        const worldScale = new THREE.Vector3()
+        for (const id of selectedArray) {
+            const group = groupMap[id]
+            if (group) {
+                group.getWorldPosition(worldPos)
+                group.getWorldQuaternion(worldQuat)
+                group.getWorldScale(worldScale)
+                snapshots.current.set(id, {
+                    position: worldPos.clone(),
+                    quaternion: worldQuat.clone(),
+                    scale: worldScale.clone(),
+                })
+            }
+        }
+    }, [selectedArray, groupMap, pivot])
+
+    // Temp vectors
+    const _delta = useMemo(() => new THREE.Vector3(), [])
+    const _deltaQuat = useMemo(() => new THREE.Quaternion(), [])
+    const _invQuat = useMemo(() => new THREE.Quaternion(), [])
+    const _offset = useMemo(() => new THREE.Vector3(), [])
+    const _deltaScale = useMemo(() => new THREE.Vector3(), [])
+    const _newWorldPos = useMemo(() => new THREE.Vector3(), [])
+    const _newWorldQuat = useMemo(() => new THREE.Quaternion(), [])
+    const _newWorldScale = useMemo(() => new THREE.Vector3(), [])
+    const _parentWorldMat = useMemo(() => new THREE.Matrix4(), [])
+    const _invParentWorld = useMemo(() => new THREE.Matrix4(), [])
+    const _localMat = useMemo(() => new THREE.Matrix4(), [])
+    const _localPos = useMemo(() => new THREE.Vector3(), [])
+    const _localQuat = useMemo(() => new THREE.Quaternion(), [])
+    const _localScale = useMemo(() => new THREE.Vector3(), [])
+    const _localEuler = useMemo(() => new THREE.Euler(), [])
+
+    const applyDeltaAndWrite = useCallback((immediate: boolean) => {
+        if (!connected) return
+
+        const objectsMap = sceneMap.get("objects") as Y.Map<Y.Map<unknown>> | undefined
+        if (!objectsMap) return
+
+        // Compute pivot deltas
+        _delta.copy(pivot.position).sub(pivotSnapshot.current)
+        _invQuat.copy(pivotQuatSnapshot.current).invert()
+        _deltaQuat.copy(pivot.quaternion).multiply(_invQuat)
+        _deltaScale.set(
+            pivotScaleSnapshot.current.x !== 0 ? pivot.scale.x / pivotScaleSnapshot.current.x : 1,
+            pivotScaleSnapshot.current.y !== 0 ? pivot.scale.y / pivotScaleSnapshot.current.y : 1,
+            pivotScaleSnapshot.current.z !== 0 ? pivot.scale.z / pivotScaleSnapshot.current.z : 1,
+        )
+
+        const doWrite = () => {
+            doc.transact(() => {
+                for (const [id, snap] of snapshots.current) {
+                    const group = groupMap[id]
+                    if (!group) continue
+
+                    // Compute new world position from snapshot + pivot delta
+                    _offset.copy(snap.position).sub(pivotSnapshot.current)
+                    _offset.applyQuaternion(_deltaQuat)
+                    _offset.multiply(_deltaScale)
+                    _newWorldPos.copy(pivotSnapshot.current).add(_delta).add(_offset)
+                    _newWorldQuat.copy(_deltaQuat).multiply(snap.quaternion)
+                    _newWorldScale.set(
+                        snap.scale.x * _deltaScale.x,
+                        snap.scale.y * _deltaScale.y,
+                        snap.scale.z * _deltaScale.z,
+                    )
+
+                    // Convert world → local by undoing parent's world transform
+                    if (group.parent && group.parent.type !== "Scene") {
+                        group.parent.updateWorldMatrix(true, false)
+                        _parentWorldMat.copy(group.parent.matrixWorld)
+                    } else {
+                        _parentWorldMat.identity()
+                    }
+                    _invParentWorld.copy(_parentWorldMat).invert()
+
+                    _localMat.compose(_newWorldPos, _newWorldQuat, _newWorldScale)
+                    _localMat.premultiply(_invParentWorld)
+                    _localMat.decompose(_localPos, _localQuat, _localScale)
+                    _localEuler.setFromQuaternion(_localQuat)
+
+                    // Apply to group
+                    group.position.copy(_localPos)
+                    group.quaternion.copy(_localQuat)
+                    group.scale.copy(_localScale)
+
+                    // Write local transform to YJS
+                    const objMap = objectsMap.get(id)
+                    if (objMap) {
+                        objMap.set("px", _localPos.x)
+                        objMap.set("py", _localPos.y)
+                        objMap.set("pz", _localPos.z)
+                        objMap.set("rx", _localEuler.x)
+                        objMap.set("ry", _localEuler.y)
+                        objMap.set("rz", _localEuler.z)
+                        objMap.set("sx", _localScale.x)
+                        objMap.set("sy", _localScale.y)
+                        objMap.set("sz", _localScale.z)
+                    }
+                }
+            }, "local-three")
+        }
+
+        doWrite()
+    }, [connected, doc, sceneMap, groupMap, pivot, _delta, _deltaQuat, _invQuat, _offset, _deltaScale,
+        _newWorldPos, _newWorldQuat, _newWorldScale, _parentWorldMat, _invParentWorld,
+        _localMat, _localPos, _localQuat, _localScale, _localEuler])
+
+    useFrame(() => {
+        if (!isDragging.current) return
+        applyDeltaAndWrite(false)
+    })
+
+    const handleDragEnd = useCallback(() => {
+        isDragging.current = false
+        applyDeltaAndWrite(true)
+
+        // Recenter pivot
+        const center = new THREE.Vector3()
+        const worldPos = new THREE.Vector3()
+        let count = 0
+        for (const id of selectedArray) {
+            const group = groupMap[id]
+            if (group) {
+                group.getWorldPosition(worldPos)
+                center.add(worldPos)
+                count++
+            }
+        }
+        if (count > 0) center.divideScalar(count)
+        pivot.position.copy(center)
+        pivot.quaternion.identity()
+        pivot.scale.set(1, 1, 1)
+    }, [selectedArray, groupMap, pivot, applyDeltaAndWrite])
+
+    const showX = axisConstraint === "none" || axisConstraint === "x"
+    const showY = axisConstraint === "none" || axisConstraint === "y"
+    const showZ = axisConstraint === "none" || axisConstraint === "z"
+
     return (
         <>
-            <mesh
-                ref={setRefs}
-                position={initialPosition}
-                rotation={initialRotation}
-                scale={initialScale}
-            >
-                <boxGeometry args={[1, 1, 1]} />
-                <meshStandardMaterial color="#4f8fff" />
-            </mesh>
-            {meshObject && (
-                <TransformControls
-                    object={meshObject}
-                    onMouseDown={() => { isDragging.current = true }}
-                    onMouseUp={() => {
-                        isDragging.current = false
-                        // Final sync to leva
-                        const mesh = meshRef.current
-                        if (mesh) {
-                            set({
-                                position: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z },
-                                rotation: { x: toDeg(mesh.rotation.x), y: toDeg(mesh.rotation.y), z: toDeg(mesh.rotation.z) },
-                                scale: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
-                            })
-                        }
-                        onTransformChange()
-                    }}
-                />
-            )}
+            <primitive object={pivot} />
+            <TransformControls
+                object={pivot}
+                mode={transformMode}
+                showX={showX}
+                showY={showY}
+                showZ={showZ}
+                onMouseDown={handleDragStart}
+                onMouseUp={handleDragEnd}
+            />
         </>
     )
 }
 
+// ---------------------------------------------------------------------------
+// SceneContent — renders all objects as a nested tree + controls for selected
+// ---------------------------------------------------------------------------
+
 function SceneContent({
-    sceneState,
-    onDirty,
-    cameraRef,
-    orbitTargetRef,
-    meshRef,
+    selectedIds,
+    primaryId,
+    onSelect,
+    transformMode,
+    axisConstraint,
 }: {
-    sceneState: SceneState
-    onDirty: () => void
-    cameraRef: React.RefObject<THREE.Camera | null>
-    orbitTargetRef: React.RefObject<THREE.Vector3 | null>
-    meshRef: React.RefObject<THREE.Mesh | null>
+    selectedIds: Set<string>
+    primaryId: string | null
+    onSelect: (id: string, modifiers: { shiftKey: boolean; ctrlKey: boolean }) => void
+    transformMode: TransformMode
+    axisConstraint: AxisConstraint
 }) {
+    const objects = useYjsObjects()
+    const [groupMap, setGroupMap] = useState<Record<string, THREE.Group>>({})
+
+    const handleGroupReady = useCallback((id: string, group: THREE.Group | null) => {
+        setGroupMap(prev => {
+            if (group) {
+                if (prev[id] === group) return prev
+                return { ...prev, [id]: group }
+            } else {
+                if (!(id in prev)) return prev
+                const next = { ...prev }
+                delete next[id]
+                return next
+            }
+        })
+    }, [])
+
+    // Build hierarchy
+    const childrenMap = useMemo(() => buildChildrenMap(objects), [objects])
+
+    // Root objects: no parent or parent doesn't exist
+    const rootIds = useMemo(() => {
+        const parentSet = new Set(objects.filter(o => o.parentId).map(o => o.parentId!))
+        return objects
+            .filter(o => !o.parentId || !objects.some(p => p.id === o.parentId))
+            .map(o => o.id)
+    }, [objects])
+
+    const primaryGroup = primaryId ? groupMap[primaryId] ?? null : null
+
     return (
         <>
             <ambientLight intensity={0.4} />
             <directionalLight position={[5, 10, 5]} intensity={0.8} />
-            <CubeWithControls
-                initialPosition={sceneState.cube.position}
-                initialRotation={sceneState.cube.rotation}
-                initialScale={sceneState.cube.scale}
-                onTransformChange={onDirty}
-                meshRef={meshRef}
-            />
+            {rootIds.map((id) => (
+                <SceneObject
+                    key={id}
+                    objectId={id}
+                    childIds={childrenMap.get(id) ?? []}
+                    isSelected={selectedIds.has(id)}
+                    isPrimary={id === primaryId}
+                    onSelect={onSelect}
+                    onGroupReady={handleGroupReady}
+                    allSelectedIds={selectedIds}
+                    allPrimaryId={primaryId}
+                    allChildrenMap={childrenMap}
+                    onGroupReadyMap={handleGroupReady}
+                />
+            ))}
+            {primaryId && primaryGroup && selectedIds.size === 1 && (
+                <SelectedObjectControls
+                    key={primaryId}
+                    objectId={primaryId}
+                    groupObject={primaryGroup}
+                    transformMode={transformMode}
+                    axisConstraint={axisConstraint}
+                />
+            )}
+            {selectedIds.size > 1 && (
+                <GroupTransformControls
+                    selectedIds={selectedIds}
+                    groupMap={groupMap}
+                    transformMode={transformMode}
+                    axisConstraint={axisConstraint}
+                />
+            )}
             <Grid
                 infiniteGrid
                 cellSize={1}
@@ -206,121 +686,251 @@ function SceneContent({
                 sectionColor="#555555"
                 fadeDistance={30}
             />
-            <CameraSync
-                onCameraChange={onDirty}
-                initialTarget={sceneState.camera.target}
-                cameraRef={cameraRef}
-                orbitTargetRef={orbitTargetRef}
-            />
+            <CameraSync />
         </>
     )
 }
 
-type SceneCanvasProps = {
-    sceneName: string
-    projectId: string
-    sceneId: string
-    initialData: Record<string, unknown>
+// ---------------------------------------------------------------------------
+// ConnectionStatus — shows sync state
+// ---------------------------------------------------------------------------
+
+function ConnectionStatus() {
+    const { connected, synced } = useYjs()
+
+    let color = "bg-red-500"
+    let label = "Disconnected"
+
+    if (connected && synced) {
+        color = "bg-green-500"
+        label = "Synced"
+    } else if (connected) {
+        color = "bg-yellow-500"
+        label = "Connecting..."
+    }
+
+    return (
+        <div className="flex items-center gap-2">
+            <span className={`inline-block w-2 h-2 rounded-full ${color}`} />
+            <span className="text-xs text-neutral-400">{label}</span>
+        </div>
+    )
 }
 
-export default function SceneCanvas({ sceneName, projectId, sceneId, initialData }: SceneCanvasProps) {
-    const [dirty, setDirty] = useState(false)
-    const [saving, setSaving] = useState(false)
+// ---------------------------------------------------------------------------
+// SceneCanvas — main component
+// ---------------------------------------------------------------------------
+
+type SceneCanvasProps = {
+    sceneName: string
+}
+
+export default function SceneCanvas({ sceneName }: SceneCanvasProps) {
     const levaStore = useCreateStore()
+    const { undoManager, connected } = useYjs()
+    const { readCamera } = useYjsCamera()
 
-    const cameraRef = useRef<THREE.Camera | null>(null)
-    const orbitTargetRef = useRef<THREE.Vector3 | null>(null)
-    const meshRef = useRef<THREE.Mesh | null>(null)
+    // Selection state
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+    const [primaryId, setPrimaryId] = useState<string | null>(null)
+    const [transformMode, setTransformMode] = useState<TransformMode>("translate")
+    const [axisConstraint, setAxisConstraint] = useState<AxisConstraint>("none")
 
-    const sceneState = parseInitialData(initialData)
-
-    const markDirty = useCallback(() => setDirty(true), [])
-
-    const handleSave = useCallback(async () => {
-        const camera = cameraRef.current
-        const mesh = meshRef.current
-        const orbitTarget = orbitTargetRef.current
-        if (!camera || !mesh) return
-
-        setSaving(true)
-
-        const globalData: SceneState = {
-            camera: {
-                position: camera.position.toArray() as Vec3,
-                target: orbitTarget
-                    ? (orbitTarget.toArray() as Vec3)
-                    : [0, 0, 0],
-            },
-            cube: {
-                position: mesh.position.toArray() as Vec3,
-                rotation: [mesh.rotation.x, mesh.rotation.y, mesh.rotation.z],
-                scale: mesh.scale.toArray() as Vec3,
-            },
+    // Flat ordering of object IDs for shift-range selection (tree DFS order)
+    const objects = useYjsObjects()
+    const flatObjectOrder = useMemo(() => {
+        const nodeMap = new Map<string, { id: string; parentId?: string; children: string[] }>()
+        for (const obj of objects) {
+            nodeMap.set(obj.id, { id: obj.id, parentId: obj.parentId, children: [] })
         }
-
-        try {
-            const res = await fetch(`/api/projects/${projectId}/scenes/${sceneId}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ globalData }),
-            })
-            if (res.ok) setDirty(false)
-        } finally {
-            setSaving(false)
-        }
-    }, [projectId, sceneId])
-
-    useEffect(() => {
-        const onKeyDown = (e: KeyboardEvent) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-                e.preventDefault()
-                handleSave()
+        const roots: string[] = []
+        for (const obj of objects) {
+            if (obj.parentId && nodeMap.has(obj.parentId)) {
+                nodeMap.get(obj.parentId)!.children.push(obj.id)
+            } else {
+                roots.push(obj.id)
             }
         }
-        window.addEventListener("keydown", onKeyDown)
-        return () => window.removeEventListener("keydown", onKeyDown)
-    }, [handleSave])
+        const flat: string[] = []
+        const dfs = (id: string) => {
+            flat.push(id)
+            const node = nodeMap.get(id)
+            if (node) for (const child of node.children) dfs(child)
+        }
+        for (const root of roots) dfs(root)
+        return flat
+    }, [objects])
+
+    const handleSelect = useCallback((id: string, modifiers: { shiftKey: boolean; ctrlKey: boolean }) => {
+        const { shiftKey, ctrlKey } = modifiers
+
+        if (ctrlKey) {
+            setSelectedIds(prev => {
+                const next = new Set(prev)
+                if (next.has(id)) {
+                    next.delete(id)
+                    setPrimaryId(p => p === id ? ([...next].pop() ?? null) : p)
+                } else {
+                    next.add(id)
+                    setPrimaryId(id)
+                }
+                return next
+            })
+        } else if (shiftKey) {
+            const anchor = primaryId
+            if (!anchor || anchor === id) {
+                setPrimaryId(id)
+                setSelectedIds(new Set([id]))
+                return
+            }
+            const anchorIdx = flatObjectOrder.indexOf(anchor)
+            const targetIdx = flatObjectOrder.indexOf(id)
+            if (anchorIdx === -1 || targetIdx === -1) {
+                setPrimaryId(id)
+                setSelectedIds(new Set([id]))
+                return
+            }
+            const start = Math.min(anchorIdx, targetIdx)
+            const end = Math.max(anchorIdx, targetIdx)
+            const rangeIds = flatObjectOrder.slice(start, end + 1)
+            setSelectedIds(new Set(rangeIds))
+        } else {
+            setSelectedIds(new Set([id]))
+            setPrimaryId(id)
+        }
+    }, [primaryId, flatObjectOrder])
+
+    const handleDeselectAll = useCallback(() => {
+        setSelectedIds(new Set())
+        setPrimaryId(null)
+    }, [])
+
+    const batchDelete = useYjsBatchDelete()
+
+    const cam = readCamera()
+    const cameraPosition: [number, number, number] = cam
+        ? [cam.px, cam.py, cam.pz]
+        : [5, 4, 5]
+
+    // Keyboard shortcuts
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            const key = e.key.toLowerCase()
+
+            // Undo/Redo
+            if ((e.ctrlKey || e.metaKey) && key === "z" && !e.shiftKey) {
+                e.preventDefault()
+                undoManager.undo()
+                return
+            }
+            if ((e.ctrlKey || e.metaKey) && key === "z" && e.shiftKey) {
+                e.preventDefault()
+                undoManager.redo()
+                return
+            }
+            if ((e.ctrlKey || e.metaKey) && key === "y") {
+                e.preventDefault()
+                undoManager.redo()
+                return
+            }
+
+            // Skip shortcuts when typing in inputs
+            const tag = (document.activeElement?.tagName ?? "").toLowerCase()
+            if (tag === "input" || tag === "textarea") return
+            if (e.ctrlKey || e.metaKey || e.altKey) return
+
+            // Transform mode shortcuts (only when something is selected)
+            if (selectedIds.size > 0) {
+                if (key === "g") {
+                    setTransformMode("translate")
+                    setAxisConstraint("none")
+                    return
+                }
+                if (key === "s") {
+                    setTransformMode("scale")
+                    setAxisConstraint("none")
+                    return
+                }
+                if (key === "r") {
+                    setTransformMode("rotate")
+                    setAxisConstraint("none")
+                    return
+                }
+                if (key === "x") {
+                    setAxisConstraint(prev => prev === "x" ? "none" : "x")
+                    return
+                }
+                if (key === "y") {
+                    setAxisConstraint(prev => prev === "y" ? "none" : "y")
+                    return
+                }
+                if (key === "z") {
+                    setAxisConstraint(prev => prev === "z" ? "none" : "z")
+                    return
+                }
+                if (key === "delete" || key === "backspace") {
+                    batchDelete([...selectedIds])
+                    handleDeselectAll()
+                    return
+                }
+            }
+
+            if (e.key === "Escape") {
+                handleDeselectAll()
+                return
+            }
+        }
+        window.addEventListener("keydown", onKeyDown, true)
+        return () => window.removeEventListener("keydown", onKeyDown, true)
+    }, [undoManager, selectedIds, batchDelete, handleDeselectAll])
 
     return (
         <LevaStoreProvider store={levaStore}>
-            <div className="flex-1 flex flex-col h-full relative">
+            <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full relative">
                 <div className="px-4 py-2 border-b border-white/5 flex items-center justify-between">
                     <h1 className="text-sm font-medium text-white">
                         {sceneName}
-                        {dirty && <span className="text-yellow-400 ml-1">*</span>}
                     </h1>
-                    <button
-                        onClick={handleSave}
-                        disabled={saving || !dirty}
-                        className={`
-                            text-xs px-3 py-1 rounded-md transition-colors
-                            ${dirty
-                                ? "bg-blue-600 hover:bg-blue-500 text-white cursor-pointer"
-                                : "bg-neutral-800 text-neutral-500 cursor-not-allowed"
-                            }
-                        `}
-                    >
-                        {saving ? "Saving..." : "Save"}
-                    </button>
+                    <ConnectionStatus />
                 </div>
-                <div className="flex-1">
-                    <Canvas
-                        camera={{
-                            position: sceneState.camera.position,
-                            fov: 50,
-                        }}
-                    >
-                        <SceneContent
-                            sceneState={sceneState}
-                            onDirty={markDirty}
-                            cameraRef={cameraRef}
-                            orbitTargetRef={orbitTargetRef}
-                            meshRef={meshRef}
-                        />
-                    </Canvas>
-                </div>
-                <div className="absolute top-12 right-2">
-                    <LevaPanel store={levaStore} fill flat titleBar={false} />
+
+                {!connected && (
+                    <div className="absolute inset-0 top-10 z-10 flex items-center justify-center bg-neutral-950/80">
+                        <p className="text-neutral-400 text-sm">
+                            Connection lost. Changes are disabled until reconnection.
+                        </p>
+                    </div>
+                )}
+
+                <div className="flex-1 min-h-0 flex flex-row overflow-hidden">
+                    <div className="flex-1 min-w-0 relative">
+                        <Canvas
+                            camera={{
+                                position: cameraPosition,
+                                fov: 50,
+                            }}
+                            onPointerMissed={() => handleDeselectAll()}
+                        >
+                            <SceneContent
+                                selectedIds={selectedIds}
+                                primaryId={primaryId}
+                                onSelect={handleSelect}
+                                transformMode={transformMode}
+                                axisConstraint={axisConstraint}
+                            />
+                        </Canvas>
+                        {selectedIds.size === 1 && primaryId && (
+                            <div className="absolute top-2 right-2">
+                                <LevaPanel store={levaStore} fill flat titleBar={false} />
+                            </div>
+                        )}
+                    </div>
+                    <SceneObjectTree
+                        selectedIds={selectedIds}
+                        primaryId={primaryId}
+                        onSelect={handleSelect}
+                        onDeselectAll={handleDeselectAll}
+                    />
                 </div>
             </div>
         </LevaStoreProvider>

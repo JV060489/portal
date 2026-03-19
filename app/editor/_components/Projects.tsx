@@ -71,11 +71,9 @@ export default function Projects() {
       </div>
 
       {/* Content */}
-      {!collapsed && (
-        <div className="flex-1 overflow-auto py-2 scrollbar-hide">
-          <ProjectTree ref={treeRef} />
-        </div>
-      )}
+      <div className={`flex-1 overflow-auto py-2 scrollbar-hide ${collapsed ? "hidden" : ""}`}>
+        <ProjectTree ref={treeRef} />
+      </div>
 
       {/* Collapsed icons */}
       {collapsed && (

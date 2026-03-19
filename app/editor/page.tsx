@@ -1,6 +1,6 @@
 export default function EditorPage() {
   return (
-    <div className="flex-1 flex items-center justify-center">
+    <div className="h-full flex items-center justify-center">
       <div className="text-center space-y-3">
         <svg
           className="w-12 h-12 mx-auto text-blue-500"

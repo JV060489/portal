@@ -30,6 +30,8 @@ function toTreeData(
   projects: ProjectData[],
   creatingProject: boolean,
   addingSceneTo: string | null,
+  pendingProject: string | null,
+  pendingScene: { projectId: string; name: string } | null,
 ): TreeNode[] {
   const nodes: TreeNode[] = projects.map((p) => {
     const sceneNodes: TreeNode[] = p.scenes.map((s) => ({
@@ -44,6 +46,14 @@ function toTreeData(
         projectId: p.id,
       });
     }
+    if (pendingScene && pendingScene.projectId === p.id) {
+      sceneNodes.push({
+        id: "__pending-scene__",
+        name: pendingScene.name,
+        projectId: p.id,
+        isPending: true,
+      });
+    }
     return {
       id: p.id,
       name: p.name,
@@ -56,6 +66,15 @@ function toTreeData(
       id: "__new-project__",
       name: "",
       isProject: true,
+      children: [],
+    });
+  }
+  if (pendingProject) {
+    nodes.push({
+      id: "__pending-project__",
+      name: pendingProject,
+      isProject: true,
+      isPending: true,
       children: [],
     });
   }
@@ -78,6 +97,8 @@ export const ProjectTree = forwardRef<ProjectTreeHandle>(
     const [loading, setLoading] = useState(true);
     const [creatingProject, setCreatingProject] = useState(false);
     const [addingSceneTo, setAddingSceneTo] = useState<string | null>(null);
+    const [pendingProject, setPendingProject] = useState<string | null>(null);
+    const [pendingScene, setPendingScene] = useState<{ projectId: string; name: string } | null>(null);
     const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
     const treeRef = useRef<TreeApi<TreeNode>>(null);
 
@@ -105,14 +126,19 @@ export const ProjectTree = forwardRef<ProjectTreeHandle>(
       const trimmed = name.trim();
       setCreatingProject(false);
       if (!trimmed) return;
-      const res = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
-      if (res.ok) {
-        const project = await res.json();
-        setProjects((prev) => [...prev, project]);
+      setPendingProject(trimmed);
+      try {
+        const res = await fetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: trimmed }),
+        });
+        if (res.ok) {
+          const project = await res.json();
+          setProjects((prev) => [...prev, project]);
+        }
+      } finally {
+        setPendingProject(null);
       }
     }
 
@@ -120,18 +146,23 @@ export const ProjectTree = forwardRef<ProjectTreeHandle>(
       const trimmed = name.trim();
       setAddingSceneTo(null);
       if (!trimmed) return;
-      const res = await fetch(`/api/projects/${projectId}/scenes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
-      if (res.ok) {
-        const scene = await res.json();
-        setProjects((prev) =>
-          prev.map((p) =>
-            p.id === projectId ? { ...p, scenes: [...p.scenes, scene] } : p,
-          ),
-        );
+      setPendingScene({ projectId, name: trimmed });
+      try {
+        const res = await fetch(`/api/projects/${projectId}/scenes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: trimmed }),
+        });
+        if (res.ok) {
+          const scene = await res.json();
+          setProjects((prev) =>
+            prev.map((p) =>
+              p.id === projectId ? { ...p, scenes: [...p.scenes, scene] } : p,
+            ),
+          );
+        }
+      } finally {
+        setPendingScene(null);
       }
     }
 
@@ -257,7 +288,7 @@ export const ProjectTree = forwardRef<ProjectTreeHandle>(
       setDeleteTarget(null);
     }
 
-    const treeData = toTreeData(projects, creatingProject, addingSceneTo);
+    const treeData = toTreeData(projects, creatingProject, addingSceneTo, pendingProject, pendingScene);
 
     if (loading) {
       return (
