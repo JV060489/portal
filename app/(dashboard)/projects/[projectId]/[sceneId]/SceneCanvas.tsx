@@ -27,6 +27,7 @@ import {
 } from "@/lib/yjs/hooks";
 import type { SceneObjectData } from "@/lib/yjs/types";
 import SceneObjectTree from "@/components/sceneComponents/SceneObjectTree";
+import { AiChatBox } from "@/components/sceneComponents/AiChatBox";
 import { cn } from "@/lib/utils";
 import { useRenameScene } from "@/features/projects/hooks/use-projects";
 
@@ -1213,6 +1214,7 @@ export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanv
             onDeselectAll={handleDeselectAll}
           />
         </div>
+        <AiChatBox />
       </div>
     </LevaStoreProvider>
   );
