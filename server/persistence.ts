@@ -1,7 +1,7 @@
 import * as Y from "yjs";
 import { PrismaClient } from "@prisma/client";
-import { docToJSON, initializeDoc, isDocEmpty, migrateOldState } from "../lib/yjs/scene-doc.js";
-import { DEFAULT_SCENE_STATE } from "../lib/yjs/types.js";
+import { docToJSON, initializeDoc, isDocEmpty, migrateOldState } from "@/lib/yjs/scene-doc";
+import { DEFAULT_SCENE_STATE } from "@/lib/yjs/types";
 
 // ---------------------------------------------------------------------------
 // Singleton Prisma client for the WS server process

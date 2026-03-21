@@ -1,5 +1,5 @@
-import Projects from "./_components/Projects"
-import TopBanner from "./_components/TopBanner"
+import Projects from "@/components/projectComponents/Projects"
+import TopBanner from "@/components/projectComponents/TopBanner"
 
 export default function EditorLayout({
     children
@@ -10,7 +10,7 @@ export default function EditorLayout({
         <section className="h-screen flex flex-col">
             <TopBanner />
             <div className="flex flex-1 min-h-0 overflow-hidden">
-                <Projects />
+                {/* <Projects /> */}
                 <div className="flex-1 min-w-0 min-h-0">
                     {children}
                 </div>

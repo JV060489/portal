@@ -19,7 +19,7 @@ export function AddObjectDropdown() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6 text-neutral-500 hover:text-neutral-300"
+          className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-accent"
           title="Add Object"
         >
           <svg
@@ -38,13 +38,13 @@ export function AddObjectDropdown() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        className="bg-neutral-900 border-neutral-700 min-w-40 z-50"
+        className="bg-popover border-border min-w-40 z-50"
         align="start"
       >
         {SHAPES.map((shape) => (
           <DropdownMenuItem
             key={shape.geometry}
-            className="text-neutral-300 focus:bg-neutral-800 focus:text-white cursor-pointer"
+            className="text-foreground focus:bg-accent focus:text-accent-foreground cursor-pointer"
             onClick={() => addObject(shape.geometry, shape.defaultName)}
           >
             <ShapeIcon geometry={shape.geometry} />
