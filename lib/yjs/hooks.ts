@@ -346,7 +346,7 @@ export function useYjsAddObject() {
 
       const name = deduplicateName(baseName, existingNames);
       const id = crypto.randomUUID();
-      const data = createDefaultObject(geometry, name);
+      const data = createDefaultObject(geometry as import("./types").ShapeGeometry, name);
 
       doc.transact(() => {
         const objMap = new Y.Map<unknown>();
@@ -429,12 +429,14 @@ export function useYjsDuplicateObject() {
             if (key === "name") {
               objMap.set(key, name);
             } else if (key === "parentId" && value) {
-              // Re-link to new parent ID
+              // Re-link to new parent ID if within duplicated subtree,
+              // otherwise preserve original parent so subtree stays attached
               const newParentId = idMapping.get(value as string);
               if (newParentId) {
                 objMap.set(key, newParentId);
+              } else {
+                objMap.set(key, value as string);
               }
-              // If parent isn't in the hierarchy being duplicated, don't set parentId
             } else {
               objMap.set(key, value);
             }

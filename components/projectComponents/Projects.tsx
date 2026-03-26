@@ -30,7 +30,7 @@ export default function Projects() {
               size="icon"
               className="h-7 w-7 text-neutral-500 hover:text-neutral-300 hover:bg-white/5"
               onClick={() => treeRef.current?.startCreatingProject()}
-              title="New Project"
+              aria-label="New Project"
             >
               <svg
                 className="w-4 h-4"
@@ -52,6 +52,8 @@ export default function Projects() {
             size="icon"
             className="h-7 w-7 text-neutral-500 hover:text-neutral-300 hover:bg-white/5"
             onClick={() => setCollapsed(!collapsed)}
+            aria-label={collapsed ? "Expand projects" : "Collapse projects"}
+            aria-expanded={!collapsed}
           >
             <svg
               className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "rotate-180" : ""}`}

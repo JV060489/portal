@@ -638,12 +638,25 @@ function GroupTransformControls({
     pivotQuatSnapshot.current.copy(pivot.quaternion);
     pivotScaleSnapshot.current.copy(pivot.scale);
 
-    // Snapshot world positions of all selected objects
+    // Only snapshot selection roots — exclude any id whose ancestor is also selected,
+    // so descendants aren't double-transformed via both their own entry and their parent's.
+    const selectedSet = new Set(selectedArray);
+    const objectsMap = sceneMap.get("objects") as Y.Map<Y.Map<unknown>> | undefined;
+    const rootIds = selectedArray.filter((id) => {
+      if (!objectsMap) return true;
+      let current = objectsMap.get(id)?.get("parentId") as string | undefined;
+      while (current) {
+        if (selectedSet.has(current)) return false; // ancestor is selected — skip
+        current = objectsMap.get(current)?.get("parentId") as string | undefined;
+      }
+      return true;
+    });
+
     snapshots.current.clear();
     const worldPos = new THREE.Vector3();
     const worldQuat = new THREE.Quaternion();
     const worldScale = new THREE.Vector3();
-    for (const id of selectedArray) {
+    for (const id of rootIds) {
       const group = groupMap[id];
       if (group) {
         group.getWorldPosition(worldPos);
@@ -1053,6 +1066,16 @@ export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanv
     setSelectedIds(new Set());
     setPrimaryId(null);
   }, []);
+
+  // Prune selection state when YJS objects are deleted remotely or via sidebar
+  useEffect(() => {
+    const yjsIds = new Set(objects.map((o) => o.id));
+    setSelectedIds((prev) => {
+      const pruned = new Set([...prev].filter((id) => yjsIds.has(id)));
+      return pruned.size === prev.size ? prev : pruned;
+    });
+    setPrimaryId((prev) => (prev && yjsIds.has(prev) ? prev : null));
+  }, [objects]);
 
   const batchDelete = useYjsBatchDelete();
 

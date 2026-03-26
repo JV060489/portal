@@ -31,6 +31,9 @@ export const useRenameProject = () => {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey });
       },
+      onError: (error) => {
+        toast.error(`Failed to rename project: ${error.message}`);
+      },
     })
   );
 };
@@ -43,6 +46,9 @@ export const useRenameScene = () => {
     trpc.projects.renameScene.mutationOptions({
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey });
+      },
+      onError: (error) => {
+        toast.error(`Failed to rename scene: ${error.message}`);
       },
     })
   );

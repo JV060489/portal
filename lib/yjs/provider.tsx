@@ -79,10 +79,12 @@ export function YjsProvider({ sceneId, children }: YjsProviderProps) {
     wsProvider.on("sync", (isSynced: boolean) => {
       synced = isSynced;
       if (isSynced && !undoManager) {
-        const objectsMap = sceneMap.get("objects") as Y.Map<unknown>;
-        if (objectsMap) {
-          undoManager = createUndoManager(objectsMap);
+        let objectsMap = sceneMap.get("objects") as Y.Map<unknown> | undefined;
+        if (!objectsMap) {
+          objectsMap = new Y.Map();
+          sceneMap.set("objects", objectsMap);
         }
+        undoManager = createUndoManager(objectsMap);
       }
       updateCtx();
     });

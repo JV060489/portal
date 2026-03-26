@@ -205,6 +205,8 @@ export default function SceneObjectTree({
             size="icon"
             className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => setCollapsed(!collapsed)}
+            aria-label="Toggle scene object tree"
+            aria-expanded={!collapsed}
           >
             <svg
               className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "" : "rotate-180"}`}

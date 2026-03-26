@@ -134,6 +134,9 @@ export function docToJSON(doc: Y.Doc): SceneStateJSON | null {
     return null;
   }
 
+  if (!metaMap) {
+    console.debug("[scene-doc] meta map missing, using DEFAULT_META");
+  }
   const meta: SceneMeta = {
     coordinateSpace:
       metaMap?.get("coordinateSpace") ?? DEFAULT_META.coordinateSpace,

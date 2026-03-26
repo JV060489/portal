@@ -208,7 +208,14 @@ export function TreeNodeRow({
         }
       }}
       onKeyDown={(e) => {
-        if (e.key === "F2") {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (node.isInternal) {
+            node.toggle();
+          } else if (node.data.projectId) {
+            onSceneClick(node.data.projectId, node.id);
+          }
+        } else if (e.key === "F2") {
           e.preventDefault();
           setRenameFromContextMenu(false);
           node.edit();

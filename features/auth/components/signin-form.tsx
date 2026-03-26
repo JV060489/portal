@@ -29,10 +29,11 @@ export default function SignInForm() {
   }, null);
 
   async function handleGoogleSignIn() {
-    await signIn.social({
-      provider: "google",
-      callbackURL: "/projects",
-    });
+    try {
+      await signIn.social({ provider: "google", callbackURL: "/projects" });
+    } catch (err) {
+      console.error("Google sign-in failed:", err);
+    }
   }
 
   return (

@@ -1,24 +1,20 @@
 import { createTRPCRouter, protectedProcedure } from "@/trpc/init";
+import { TRPCError } from "@trpc/server";
 import { prisma } from "@/server/persistence";
 import { generateSlug } from "random-word-slugs";
 import { z } from "zod";
 
 export const projectsRouter = createTRPCRouter({
   create: protectedProcedure.mutation(async ({ ctx }) => {
-    const project = await prisma.project.create({
-      data: {
-        name: generateSlug(3),
-        userId: ctx.auth.user.id,
-      },
-    });
+    const name = generateSlug(3);
+    const userId = ctx.auth.user.id;
 
-    // Create a default scene for every new project
-    const scene = await prisma.scene.create({
-      data: {
-        name: "Scene 1",
-        userId: ctx.auth.user.id,
-        projectId: project.id,
-      },
+    const [project, scene] = await prisma.$transaction(async (tx) => {
+      const p = await tx.project.create({ data: { name, userId } });
+      const s = await tx.scene.create({
+        data: { name: "Scene 1", userId, projectId: p.id },
+      });
+      return [p, s] as const;
     });
 
     return { ...project, defaultSceneId: scene.id };
@@ -27,6 +23,15 @@ export const projectsRouter = createTRPCRouter({
   createScene: protectedProcedure
     .input(z.object({ projectId: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Verify the authenticated user owns this project
+      const project = await prisma.project.findFirst({
+        where: { id: input.projectId, userId: ctx.auth.user.id },
+        select: { id: true },
+      });
+      if (!project) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Project not found" });
+      }
+
       // Count existing scenes to name the new one
       const count = await prisma.scene.count({
         where: { projectId: input.projectId },

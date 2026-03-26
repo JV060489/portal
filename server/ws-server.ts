@@ -243,6 +243,9 @@ wss.on("connection", async (ws, req) => {
     doc.off("update", updateHandler);
     awareness.off("update", awarenessHandler);
 
+    // Remove this client's presence/cursor state from awareness
+    awarenessProtocol.removeAwarenessStates(awareness, [awareness.clientID], null);
+
     const clients = roomClients.get(docName);
     if (clients) {
       clients.delete(ws);

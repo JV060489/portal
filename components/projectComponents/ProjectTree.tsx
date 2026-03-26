@@ -109,10 +109,11 @@ export const ProjectTree = forwardRef<ProjectTreeHandle>(
     const fetchProjects = useCallback(async () => {
       try {
         const res = await fetch("/api/projects");
-        if (res.ok) {
-          const data = await res.json();
-          setProjects(data);
-        }
+        if (!res.ok) throw new Error(`Failed to fetch projects: ${res.status}`);
+        const data = await res.json();
+        setProjects(data);
+      } catch (err) {
+        console.error("[ProjectTree] fetchProjects error:", err);
       } finally {
         setLoading(false);
       }
@@ -280,9 +281,7 @@ export const ProjectTree = forwardRef<ProjectTreeHandle>(
       }
 
       if (!deleted) {
-        if (typeof window !== "undefined") {
-          window.alert("Failed to delete. Please try again.");
-        }
+        console.error("[ProjectTree] Failed to delete item:", deleteTarget);
         return;
       }
       setDeleteTarget(null);

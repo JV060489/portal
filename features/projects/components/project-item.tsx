@@ -10,7 +10,7 @@ import { ChevronRight, Plus, Film } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useCreateScene, useRenameProject } from "../hooks/use-projects";
 import { cn } from "@/lib/utils";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 type Scene = { id: string; name: string };
 type Project = { id: string; name: string; scenes: Scene[] };
@@ -92,7 +92,6 @@ export const ProjectItem = ({ project }: { project: Project }) => {
   const [open, setOpen] = useState(false);
   const createScene = useCreateScene();
   const renameProject = useRenameProject();
-  const router = useRouter();
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="w-full">
@@ -133,14 +132,14 @@ export const ProjectItem = ({ project }: { project: Project }) => {
           <p className="py-2 text-xs text-neutral-500">No scenes yet.</p>
         ) : (
           project.scenes.map((scene) => (
-            <div
+            <Link
               key={scene.id}
-              onClick={() => router.push(`/projects/${project.id}/${scene.id}`)}
-              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-neutral-300 transition-colors hover:bg-neutral-800 cursor-pointer"
+              href={`/projects/${project.id}/${scene.id}`}
+              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-neutral-300 transition-colors hover:bg-neutral-800"
             >
               <Film className="size-3.5 text-neutral-500 shrink-0" />
               <span className="truncate">{scene.name}</span>
-            </div>
+            </Link>
           ))
         )}
       </CollapsibleContent>

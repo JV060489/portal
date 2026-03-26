@@ -21,6 +21,7 @@ export function AddObjectDropdown() {
           size="icon"
           className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-accent"
           title="Add Object"
+          aria-label="Add Object"
         >
           <svg
             className="w-4 h-4"

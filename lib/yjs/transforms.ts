@@ -97,9 +97,11 @@ export function computeParentWorldMatrix(
   return computeWorldMatrix(parentId, objectsMap, result);
 }
 
+// Transforms use XYZ rotation order; round-trips expect the same convention.
 /** Decompose a Matrix4 into px…sz values. */
 export function decomposeMatrix(mat: THREE.Matrix4): TransformTuple {
   mat.decompose(_pos, _quat, _scale);
+  _euler.order = "XYZ";
   _euler.setFromQuaternion(_quat);
   return {
     px: _pos.x, py: _pos.y, pz: _pos.z,

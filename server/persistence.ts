@@ -161,17 +161,22 @@ export function onClientDisconnect(docName: string): void {
   if (room.clientCount === 0) {
     // Start collection timeout
     room.collectionTimer = setTimeout(async () => {
-      // Flush any pending writes
-      if (room.flushTimer) {
-        clearTimeout(room.flushTimer);
-        room.flushTimer = null;
+      try {
+        // Flush any pending writes
+        if (room.flushTimer) {
+          clearTimeout(room.flushTimer);
+          room.flushTimer = null;
+        }
+        await writeStateToDB(room);
+      } catch (err) {
+        console.error(`[persistence] Error flushing room ${docName} on collection:`, err);
+      } finally {
+        // Always clean up memory regardless of write success
+        room.collectionTimer = null;
+        room.doc.destroy();
+        rooms.delete(docName);
+        console.log(`[persistence] Collected idle room: ${docName}`);
       }
-      await writeStateToDB(room);
-
-      // Destroy from memory
-      room.doc.destroy();
-      rooms.delete(docName);
-      console.log(`[persistence] Collected idle room: ${docName}`);
     }, COLLECTION_TIMEOUT_MS);
   }
 }

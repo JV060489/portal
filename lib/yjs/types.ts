@@ -114,7 +114,7 @@ export const SHAPES = [
 export type ShapeGeometry = (typeof SHAPES)[number]["geometry"];
 
 export function createDefaultObject(
-  geometry: string,
+  geometry: ShapeGeometry,
   name: string,
 ): SceneObjectData {
   return {

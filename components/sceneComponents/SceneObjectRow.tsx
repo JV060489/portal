@@ -189,6 +189,8 @@ export function SceneObjectRow({
   const rowContent = (
     <div
       data-scene-row
+      role="treeitem"
+      aria-selected={isSelected}
       className={cn(
         "flex items-center gap-2 px-3 py-1.5 mx-1 my-0.5 rounded-lg cursor-pointer select-none",
         "transition-all duration-150 group outline-none",
@@ -203,7 +205,10 @@ export function SceneObjectRow({
         if (!editing) onSelect(node.id, { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey });
       }}
       onKeyDown={(e) => {
-        if (e.key === "F2") {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (!editing) onSelect(node.id, { shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey });
+        } else if (e.key === "F2") {
           e.preventDefault();
           setEditing(true);
         }
