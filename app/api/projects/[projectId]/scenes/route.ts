@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getUser } from "@/lib/auth-session";
 import { NextResponse, NextRequest } from "next/server";
+import { DEFAULT_SCENE_STATE } from "@/lib/yjs/types";
 
 type Params = { params: Promise<{ projectId: string }> };
 
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       projectId,
       name,
       description: body.description ?? "",
-      globalData: body.globalData ?? {},
+      globalData: body.globalData ?? DEFAULT_SCENE_STATE,
     },
   });
 
