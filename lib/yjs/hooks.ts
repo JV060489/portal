@@ -330,7 +330,7 @@ export function useYjsAddObject() {
   const { doc, sceneMap, connected } = useYjs();
 
   return useCallback(
-    (geometry: string, baseName: string): string | null => {
+    (geometry: string, baseName: string, presetId?: string): string | null => {
       if (!connected) return null;
 
       const objectsMap = sceneMap.get("objects") as
@@ -345,8 +345,8 @@ export function useYjsAddObject() {
       });
 
       const name = deduplicateName(baseName, existingNames);
-      const id = crypto.randomUUID();
-      const data = createDefaultObject(geometry as import("./types").ShapeGeometry, name);
+      const id = presetId ?? crypto.randomUUID();
+      const data = createDefaultObject(geometry as "box" | "sphere" | "cylinder" | "cone" | "torus" | "plane" | "circle" | "icosahedron", name);
 
       doc.transact(() => {
         const objMap = new Y.Map<unknown>();

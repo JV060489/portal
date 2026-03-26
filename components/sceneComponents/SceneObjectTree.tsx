@@ -129,13 +129,16 @@ export default function SceneObjectTree({
   primaryId,
   onSelect,
   onDeselectAll,
+  collapsed,
+  onCollapse,
 }: {
   selectedIds: Set<string>;
   primaryId: string | null;
   onSelect: (id: string, modifiers: { shiftKey: boolean; ctrlKey: boolean }) => void;
   onDeselectAll: () => void;
+  collapsed: boolean;
+  onCollapse: (v: boolean) => void;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
   // Tracks which nodes are expanded; all nodes open by default
   const [openIds, setOpenIds] = useState<Set<string>>(() => new Set());
 
@@ -184,13 +187,7 @@ export default function SceneObjectTree({
   };
 
   return (
-    <aside
-      className={`
-        h-full bg-card border-l border-border flex flex-col shrink-0
-        transition-all duration-300 ease-in-out overflow-hidden
-        ${collapsed ? "w-12" : "w-56"}
-      `}
-    >
+    <aside className="h-full w-full bg-card border-r border-border flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         {!collapsed && (
@@ -204,12 +201,10 @@ export default function SceneObjectTree({
             variant="ghost"
             size="icon"
             className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-accent"
-            onClick={() => setCollapsed(!collapsed)}
-            aria-label="Toggle scene object tree"
-            aria-expanded={!collapsed}
+            onClick={() => onCollapse(!collapsed)}
           >
             <svg
-              className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "" : "rotate-180"}`}
+              className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "rotate-180" : ""}`}
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"

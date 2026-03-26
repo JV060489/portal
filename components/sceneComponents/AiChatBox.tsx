@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as Y from "yjs";
 import * as Sentry from "@sentry/nextjs";
-import { Bot, ChevronDown, ChevronUp, SendHorizontal } from "lucide-react";
+import { Bot, SendHorizontal } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useYjs } from "@/lib/yjs/provider";
 import {
   useYjsAddObject,
@@ -37,7 +38,7 @@ const MODELS = [
 // AiChatBox
 // ---------------------------------------------------------------------------
 
-export function AiChatBox() {
+export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCollapse: (v: boolean) => void }) {
   const { doc, sceneMap, connected } = useYjs();
   const objects = useYjsObjects();
   const addObject = useYjsAddObject();
@@ -45,7 +46,6 @@ export function AiChatBox() {
   const renameObject = useYjsRenameObject();
   const duplicateObject = useYjsDuplicateObject();
 
-  const [expanded, setExpanded] = useState(true);
   const [selectedModel, setSelectedModel] = useState("gpt-5-nano");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -76,7 +76,8 @@ export function AiChatBox() {
             (args.name as string | undefined) ??
             SHAPES.find((s) => s.geometry === geometry)?.defaultName ??
             "Object";
-          addObject(geometry, name);
+          const presetId = args.id as string | undefined;
+          addObject(geometry, name, presetId);
           break;
         }
         case "delete_object": {
@@ -139,7 +140,12 @@ export function AiChatBox() {
           for (const tc of toolCalls) {
             executeToolCall(tc);
           }
-          setMessages((prev) => [...prev, { role: "assistant", content: data.text }]);
+          const assistantText =
+            data.text ||
+            (toolCalls.length > 0
+              ? toolCalls.map((tc) => `Called ${tc.toolName}`).join(", ") + "."
+              : "Done.");
+          setMessages((prev) => [...prev, { role: "assistant", content: assistantText }]);
           setIsLoading(false);
           setJobId(null);
         } else if (data.status === "error") {
@@ -213,47 +219,59 @@ export function AiChatBox() {
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="border-t border-white/5 bg-neutral-900 flex flex-col">
+    <div className="h-full w-full bg-card border-l border-border flex flex-col">
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2 select-none">
-        <Bot className="w-4 h-4 text-neutral-400 shrink-0" />
-        <span className="text-xs font-medium text-neutral-300 flex-1">AI Assistant</span>
-
-        {/* Model selector */}
-        <select
-          value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          disabled={isLoading}
-          className="text-xs bg-neutral-800 border border-white/10 rounded px-2 py-1 text-neutral-300 focus:outline-none focus:border-white/30 disabled:opacity-50"
-        >
-          {MODELS.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-
-        {/* Collapse toggle */}
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="text-neutral-500 hover:text-neutral-300 transition-colors"
-        >
-          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
-        </button>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-accent"
+            onClick={() => onCollapse(!collapsed)}
+          >
+            <svg
+              className={`w-4 h-4 transition-transform duration-300 ${collapsed ? "rotate-180" : ""}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+            </svg>
+          </Button>
+          {!collapsed && (
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Assistant
+            </span>
+          )}
+        </div>
+        {!collapsed && (
+          <select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            disabled={isLoading}
+            className="text-xs bg-neutral-800 border border-white/10 rounded px-2 py-1 text-neutral-300 focus:outline-none focus:border-white/30 disabled:opacity-50"
+          >
+            {MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
 
-      {/* Expanded area */}
-      {expanded && (
+      {!collapsed && (
         <>
           {/* Error banner */}
           {error && (
-            <div className="mx-3 mb-2 px-3 py-2 rounded-md bg-red-950 border border-red-800 text-red-300 text-xs">
+            <div className="mx-3 mt-2 px-3 py-2 rounded-md bg-red-950 border border-red-800 text-red-300 text-xs shrink-0">
               {error}
             </div>
           )}
 
-          {/* Messages */}
-          <div className="flex flex-col gap-2 px-3 pb-2 max-h-48 overflow-y-auto">
+          {/* Messages — fills remaining space */}
+          <div className="flex-1 min-h-0 flex flex-col gap-2 px-3 py-2 overflow-y-auto">
             {messages.length === 0 && !isLoading && (
               <p className="text-xs text-neutral-600 py-2 text-center">
                 Ask me to add, move, rename, or recolor objects in the scene.
@@ -286,7 +304,7 @@ export function AiChatBox() {
           </div>
 
           {/* Input row */}
-          <div className="flex items-end gap-2 px-3 pb-3">
+          <div className="flex items-end gap-2 px-3 pb-3 pt-2 border-t border-border shrink-0">
             <textarea
               ref={textareaRef}
               value={input}
@@ -307,6 +325,15 @@ export function AiChatBox() {
             </button>
           </div>
         </>
+      )}
+
+      {/* Collapsed icon */}
+      {collapsed && (
+        <div className="flex flex-col items-center gap-3 pt-3">
+          <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center">
+            <Bot className="w-4 h-4 text-primary" />
+          </div>
+        </div>
       )}
     </div>
   );
