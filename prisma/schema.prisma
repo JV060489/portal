@@ -90,3 +90,14 @@ model Verification {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 }
+
+model AiJobResult {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  jobId     String   @unique
+  userId    String
+  status    String   @default("pending")
+  toolCalls Json?
+  text      String?
+  error     String?
+  createdAt DateTime @default(now())
+}

@@ -89,3 +89,7 @@ pnpm exec prisma db push    # Push schema to MongoDB (MUST use pnpm exec)
 pnpm exec prisma generate   # Regenerate Prisma client
 pnpm exec prisma studio     # Open Prisma Studio
 ```
+
+### Rules to follow 
+Always refer to the latest docs before implementing any feature
+

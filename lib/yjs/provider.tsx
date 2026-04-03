@@ -4,6 +4,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -43,8 +44,17 @@ export function YjsProvider({ sceneId, children }: YjsProviderProps) {
 
   const token = session?.session?.token;
 
+  // Stabilize token: once we have a valid token, keep it even if useSession()
+  // temporarily returns undefined (HMR, session refetch, etc.). This prevents
+  // the entire component tree from unmounting on transient session gaps.
+  const stableTokenRef = useRef<string | undefined>(undefined);
+  if (token) {
+    stableTokenRef.current = token;
+  }
+  const stableToken = stableTokenRef.current;
+
   useEffect(() => {
-    if (!token) return;
+    if (!stableToken) return;
 
     const doc = new Y.Doc();
     const sceneMap = doc.getMap("scene");
@@ -56,15 +66,20 @@ export function YjsProvider({ sceneId, children }: YjsProviderProps) {
       doc,
       {
         connect: true,
-        params: { token },
+        params: { token: stableToken },
       }
     );
 
     let connected = false;
     let synced = false;
+    // Track whether we've completed initial sync at least once.
+    // After the first sync, temporary disconnects should NOT null out the
+    // context — the Y.Doc remains valid offline and will re-sync on reconnect.
+    let hasInitialSynced = false;
 
     const updateCtx = () => {
-      if (!connected || !synced || !undoManager) {
+      if (!hasInitialSynced || !undoManager) {
+        // Haven't done initial sync yet — keep showing loading
         setCtx(null);
         return;
       }
@@ -86,6 +101,9 @@ export function YjsProvider({ sceneId, children }: YjsProviderProps) {
         }
         undoManager = createUndoManager(objectsMap);
       }
+      if (isSynced) {
+        hasInitialSynced = true;
+      }
       updateCtx();
     });
 
@@ -96,9 +114,9 @@ export function YjsProvider({ sceneId, children }: YjsProviderProps) {
       doc.destroy();
       setCtx(null);
     };
-  }, [sceneId, token]);
+  }, [sceneId, stableToken]);
 
-  if (!token) {
+  if (!stableToken) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-neutral-950 text-neutral-400">
         Authenticating...

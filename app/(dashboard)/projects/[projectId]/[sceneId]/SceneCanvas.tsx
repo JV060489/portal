@@ -27,6 +27,7 @@ import {
 } from "@/lib/yjs/hooks";
 import type { SceneObjectData } from "@/lib/yjs/types";
 import SceneObjectTree from "@/components/sceneComponents/SceneObjectTree";
+import { AiChatBox } from "@/components/sceneComponents/AiChatBox";
 import { cn } from "@/lib/utils";
 import { useRenameScene } from "@/features/projects/hooks/use-projects";
 
@@ -254,7 +255,7 @@ function SceneObject({
 
   // Read YJS state only once on mount for geometry/material
   const [initial] = useState(() => readObject());
-  const materialColor = initial?.materialColor ?? "#4f8fff";
+  const [materialColor, setMaterialColor] = useState(initial?.materialColor ?? "#4f8fff");
 
   const setGroupRef = useCallback(
     (node: THREE.Group | null) => {
@@ -281,6 +282,10 @@ function SceneObject({
     return observeObject((changes: Partial<SceneObjectData>) => {
       const group = groupRef.current;
       if (!group) return;
+
+      if (changes.materialColor !== undefined) {
+        setMaterialColor(changes.materialColor);
+      }
 
       if (
         changes.px !== undefined ||
@@ -1156,11 +1161,33 @@ export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanv
     return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [undoManager, selectedIds, batchDelete, handleDeselectAll]);
 
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [chatWidth, setChatWidth] = useState(300);
+  const chatDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onChatResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    chatDragRef.current = { startX: e.clientX, startWidth: chatWidth };
+    const onMove = (ev: MouseEvent) => {
+      if (!chatDragRef.current) return;
+      const delta = chatDragRef.current.startX - ev.clientX;
+      const next = Math.min(600, Math.max(300, chatDragRef.current.startWidth + delta)); // min = default
+      setChatWidth(next);
+    };
+    const onUp = () => {
+      chatDragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [chatWidth]);
+
   return (
     <LevaStoreProvider store={levaStore}>
       <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full relative">
         <SceneTopBar sceneName={sceneName} sceneId={sceneId} projectId={projectId} />
-
 
         {!connected && (
           <div className="absolute inset-0 top-10 z-10 flex items-center justify-center bg-neutral-950/80">
@@ -1171,6 +1198,20 @@ export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanv
         )}
 
         <div className="flex-1 min-h-0 flex flex-row overflow-hidden">
+
+          {/* Left panel — scene tree */}
+          <div className={cn("h-full shrink-0 transition-all duration-200 overflow-hidden", treeCollapsed ? "w-12" : "w-56")}>
+            <SceneObjectTree
+              selectedIds={selectedIds}
+              primaryId={primaryId}
+              onSelect={handleSelect}
+              onDeselectAll={handleDeselectAll}
+              collapsed={treeCollapsed}
+              onCollapse={setTreeCollapsed}
+            />
+          </div>
+
+          {/* Canvas — fills remaining space */}
           <div className="flex-1 min-w-0 relative bg-black">
             <Canvas
               camera={{
@@ -1206,12 +1247,21 @@ export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanv
               ))}
             </div>
           </div>
-          <SceneObjectTree
-            selectedIds={selectedIds}
-            primaryId={primaryId}
-            onSelect={handleSelect}
-            onDeselectAll={handleDeselectAll}
-          />
+
+          {/* Right panel — AI chat */}
+          {!chatCollapsed && (
+            <div
+              className="w-1 h-full shrink-0 cursor-col-resize bg-transparent hover:bg-white/10 transition-colors"
+              onMouseDown={onChatResizeStart}
+            />
+          )}
+          <div
+            className={cn("h-full shrink-0 overflow-hidden", chatCollapsed ? "w-12" : "transition-none")}
+            style={chatCollapsed ? undefined : { width: chatWidth }}
+          >
+            <AiChatBox collapsed={chatCollapsed} onCollapse={setChatCollapsed} />
+          </div>
+
         </div>
       </div>
     </LevaStoreProvider>
