@@ -18,7 +18,7 @@ export default function Page() {
         </Button>
       </div>
       <p className='text-xl text-gray-500'>
-        3D Codex for Designers
+        Codex for 3D
       </p>
     </header>
   )
