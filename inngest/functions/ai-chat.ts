@@ -3,6 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateText, tool, jsonSchema, stepCountIs } from "ai";
 import * as Sentry from "@sentry/nextjs";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 const SYSTEM_PROMPT = `You are a 3D scene editor AI. Respond briefly. When asked to modify the scene, call the appropriate tool.
@@ -257,7 +258,7 @@ export const aiChatFunction = inngest.createFunction(
         where: { jobId },
         data: {
           status: "done",
-          toolCalls: result.writeCalls,
+          toolCalls: result.writeCalls as unknown as Prisma.InputJsonValue,
           text: result.finalText,
         },
       });

@@ -30,7 +30,6 @@ ENV NODE_ENV=production
 # Copy standalone Next.js output
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
 
 # Copy full node_modules (needed by WS server for yjs, ws, prisma, etc.)
 COPY --from=builder /app/node_modules ./node_modules
@@ -43,6 +42,9 @@ COPY --from=builder /app/package.json ./package.json
 
 # Copy Prisma schema (needed for db push at startup)
 COPY --from=builder /app/prisma ./prisma
+
+# Pre-install Inngest CLI so it's cached (not downloaded at runtime)
+RUN npx inngest-cli@latest --version || true
 
 # Copy the start script
 COPY start.sh ./
