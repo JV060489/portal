@@ -14,6 +14,8 @@ FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+ENV DATABASE_URL="mongodb://localhost:27017/dummy"
+
 # Generate Prisma client
 RUN pnpm exec prisma generate
 
