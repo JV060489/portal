@@ -15,7 +15,7 @@ const lexend = Lexend({
 
 export const metadata: Metadata = {
   title: "Portal",
-  description: "3D Codex for Designers",
+  description: "Scene Creation in Web",
 };
 
 export default function RootLayout({
