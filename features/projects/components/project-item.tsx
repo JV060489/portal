@@ -6,9 +6,15 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
-import { ChevronRight, Plus, Film } from "lucide-react";
+import { DeleteDialog, type DeleteTarget } from "@/components/projectComponents/DeleteDialog";
+import { ChevronRight, Plus, Film, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useCreateScene, useRenameProject } from "../hooks/use-projects";
+import {
+  useCreateScene,
+  useDeleteProject,
+  useDeleteScene,
+  useRenameProject,
+} from "../hooks/use-projects";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 
@@ -90,59 +96,145 @@ function InlineRename({
 
 export const ProjectItem = ({ project }: { project: Project }) => {
   const [open, setOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const createScene = useCreateScene();
   const renameProject = useRenameProject();
+  const deleteProject = useDeleteProject();
+  const deleteScene = useDeleteScene();
+
+  const isDeleting = deleteProject.isPending || deleteScene.isPending;
+
+  const handleDelete = () => {
+    if (!deleteTarget) return;
+
+    if (deleteTarget.isProject) {
+      deleteProject.mutate(
+        { projectId: deleteTarget.id, projectName: deleteTarget.name },
+        {
+          onSuccess: () => setDeleteTarget(null),
+        },
+      );
+      return;
+    }
+
+    if (deleteTarget.projectId) {
+      deleteScene.mutate(
+        {
+          projectId: deleteTarget.projectId,
+          sceneId: deleteTarget.id,
+          sceneName: deleteTarget.name,
+        },
+        {
+          onSuccess: () => setDeleteTarget(null),
+        },
+      );
+    }
+  };
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="w-full">
-      <div className="flex items-center justify-between gap-2 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
-        <div className="flex items-center gap-2">
-          <CollapsibleTrigger asChild>
-            <button
-              className="flex items-center justify-center rounded p-0.5 text-neutral-400 transition-colors hover:text-neutral-100 shrink-0"
-              aria-label="Toggle scenes"
-            >
-              <ChevronRight
-                className={cn("size-4 transition-transform duration-200", open && "rotate-90")}
-              />
-            </button>
-          </CollapsibleTrigger>
+    <>
+      <Collapsible open={open} onOpenChange={setOpen} className="w-full">
+        <div className="flex items-center justify-between gap-2 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <CollapsibleTrigger asChild>
+              <button
+                className="flex items-center justify-center rounded p-0.5 text-neutral-400 transition-colors hover:text-neutral-100 shrink-0"
+                aria-label="Toggle scenes"
+              >
+                <ChevronRight
+                  className={cn("size-4 transition-transform duration-200", open && "rotate-90")}
+                />
+              </button>
+            </CollapsibleTrigger>
 
-          <InlineRename
-            value={project.name}
-            isPending={renameProject.isPending}
-            onSave={(name) => renameProject.mutate({ projectId: project.id, name })}
-          />
+            <InlineRename
+              value={project.name}
+              isPending={renameProject.isPending}
+              onSave={(name) => renameProject.mutate({ projectId: project.id, name })}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs text-neutral-400 hover:text-neutral-100"
+              onClick={() => {
+                createScene.mutate({ projectId: project.id });
+                setOpen(true);
+              }}
+              disabled={createScene.isPending || isDeleting}
+            >
+              <Plus className="size-3.5" />
+              Add Scene
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+              onClick={() =>
+                setDeleteTarget({
+                  id: project.id,
+                  name: project.name,
+                  isProject: true,
+                })
+              }
+              disabled={isDeleting}
+            >
+              <Trash2 className="size-3.5" />
+              Delete Project
+            </Button>
+          </div>
         </div>
 
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1 px-2 text-xs text-neutral-400 hover:text-neutral-100 shrink-0"
-          onClick={() => { createScene.mutate({ projectId: project.id }); setOpen(true); }}
-          disabled={createScene.isPending}
-        >
-          <Plus className="size-3.5" />
-          Add Scene
-        </Button>
-      </div>
+        <CollapsibleContent className="pl-6 pt-1 flex flex-col gap-1">
+          {project.scenes.length === 0 ? (
+            <p className="py-2 text-xs text-neutral-500">No scenes yet.</p>
+          ) : (
+            project.scenes.map((scene) => (
+              <div
+                key={scene.id}
+                className="flex items-center gap-2 rounded-md pr-2 text-sm text-neutral-300 transition-colors hover:bg-neutral-800"
+              >
+                <Link
+                  href={`/projects/${project.id}/${scene.id}`}
+                  className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-3 py-2"
+                >
+                  <Film className="size-3.5 text-neutral-500 shrink-0" />
+                  <span className="truncate">{scene.name}</span>
+                </Link>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 shrink-0 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                  onClick={() =>
+                    setDeleteTarget({
+                      id: scene.id,
+                      name: scene.name,
+                      isProject: false,
+                      projectId: project.id,
+                    })
+                  }
+                  disabled={isDeleting}
+                  aria-label={`Delete ${scene.name}`}
+                  title="Delete Scene"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </div>
+            ))
+          )}
+        </CollapsibleContent>
+      </Collapsible>
 
-      <CollapsibleContent className="pl-6 pt-1 flex flex-col gap-1">
-        {project.scenes.length === 0 ? (
-          <p className="py-2 text-xs text-neutral-500">No scenes yet.</p>
-        ) : (
-          project.scenes.map((scene) => (
-            <Link
-              key={scene.id}
-              href={`/projects/${project.id}/${scene.id}`}
-              className="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-neutral-300 transition-colors hover:bg-neutral-800"
-            >
-              <Film className="size-3.5 text-neutral-500 shrink-0" />
-              <span className="truncate">{scene.name}</span>
-            </Link>
-          ))
-        )}
-      </CollapsibleContent>
-    </Collapsible>
+      <DeleteDialog
+        target={deleteTarget}
+        onClose={() => {
+          if (!isDeleting) setDeleteTarget(null);
+        }}
+        onConfirm={handleDelete}
+        isPending={isDeleting}
+      />
+    </>
   );
 };

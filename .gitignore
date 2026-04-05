@@ -41,6 +41,7 @@ yarn-error.log*
 next-env.d.ts
 
 /generated/prisma
+/blender/
 
 # Sentry Config File
 .env.sentry-build-plugin

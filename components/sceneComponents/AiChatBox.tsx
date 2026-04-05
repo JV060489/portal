@@ -56,10 +56,22 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const resizeTextarea = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, []);
+
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [input, resizeTextarea]);
 
   // ---------------------------------------------------------------------------
   // Execute a tool call against YJS
@@ -313,8 +325,8 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
               disabled={isLoading}
               rows={1}
               placeholder="Ask AI to edit the scene..."
-              className="flex-1 resize-none bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
-              style={{ minHeight: "2.25rem", maxHeight: "6rem" }}
+              className="flex-1 resize-none overflow-hidden bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
+              style={{ minHeight: "2.25rem", maxHeight: "10rem" }}
             />
             <button
               onClick={handleSubmit}

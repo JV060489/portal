@@ -70,3 +70,71 @@ export const useCreateScene = () => {
     })
   );
 };
+
+export const useDeleteProject = () => {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const queryKey = trpc.projects.getMany.queryOptions().queryKey;
+
+  return useMutation({
+    mutationFn: async ({
+      projectId,
+      projectName,
+    }: {
+      projectId: string;
+      projectName: string;
+    }) => {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to delete project.");
+      }
+
+      return { projectId, projectName };
+    },
+    onSuccess: ({ projectName }) => {
+      toast.success(`Project "${projectName}" deleted.`);
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to delete project.");
+    },
+  });
+};
+
+export const useDeleteScene = () => {
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const queryKey = trpc.projects.getMany.queryOptions().queryKey;
+
+  return useMutation({
+    mutationFn: async ({
+      projectId,
+      sceneId,
+      sceneName,
+    }: {
+      projectId: string;
+      sceneId: string;
+      sceneName: string;
+    }) => {
+      const res = await fetch(`/api/projects/${projectId}/scenes/${sceneId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to delete scene.");
+      }
+
+      return { sceneId, sceneName };
+    },
+    onSuccess: ({ sceneName }) => {
+      toast.success(`Scene "${sceneName}" deleted.`);
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to delete scene.");
+    },
+  });
+};

@@ -22,10 +22,12 @@ export function DeleteDialog({
   target,
   onClose,
   onConfirm,
+  isPending = false,
 }: {
   target: DeleteTarget;
   onClose: () => void;
   onConfirm: () => void;
+  isPending?: boolean;
 }) {
   return (
     <AlertDialog open={!!target} onOpenChange={(open) => !open && onClose()}>
@@ -41,14 +43,18 @@ export function DeleteDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel className="bg-neutral-800 border-neutral-700 hover:bg-neutral-700">
+          <AlertDialogCancel
+            disabled={isPending}
+            className="bg-neutral-800 border-neutral-700 hover:bg-neutral-700"
+          >
             Cancel
           </AlertDialogCancel>
           <AlertDialogAction
             onClick={onConfirm}
+            disabled={isPending}
             className="bg-red-600 hover:bg-red-700 text-white"
           >
-            Delete
+            {isPending ? "Deleting..." : "Delete"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

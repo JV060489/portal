@@ -1,15 +1,17 @@
 "use client";
 
 import { signIn } from "@/lib/auth-client";
+import { Loader2Icon } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function SignInForm() {
   const router = useRouter();
+  const [isGooglePending, setIsGooglePending] = useState(false);
 
   const [error, submitAction, isPending] = useActionState<
     string | null,
@@ -28,11 +30,15 @@ export default function SignInForm() {
     return null;
   }, null);
 
+  const isBusy = isPending || isGooglePending;
+
   async function handleGoogleSignIn() {
+    setIsGooglePending(true);
     try {
       await signIn.social({ provider: "google", callbackURL: "/projects" });
     } catch (err) {
       console.error("Google sign-in failed:", err);
+      setIsGooglePending(false);
     }
   }
 
@@ -49,7 +55,11 @@ export default function SignInForm() {
           variant="outline"
           className="w-full border-neutral-700 bg-neutral-900 hover:bg-neutral-800"
           onClick={handleGoogleSignIn}
+          disabled={isBusy}
         >
+          {isGooglePending ? (
+            <Loader2Icon className="h-4 w-4 animate-spin" />
+          ) : (
           <svg className="h-4 w-4" viewBox="0 0 24 24">
             <path
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
@@ -68,7 +78,8 @@ export default function SignInForm() {
               fill="#EA4335"
             />
           </svg>
-          Continue with Google
+          )}
+          {isGooglePending ? "Continuing with Google..." : "Continue with Google"}
         </Button>
 
         <div className="flex items-center gap-3">
@@ -85,6 +96,7 @@ export default function SignInForm() {
               name="email"
               type="email"
               required
+              disabled={isBusy}
               className="border-neutral-700 bg-neutral-900"
             />
           </div>
@@ -96,20 +108,28 @@ export default function SignInForm() {
               name="password"
               type="password"
               required
+              disabled={isBusy}
               className="border-neutral-700 bg-neutral-900"
             />
           </div>
 
           {error && <p className="text-sm text-red-400">{error}</p>}
 
-          <Button type="submit" disabled={isPending} className="w-full">
+          <Button type="submit" disabled={isBusy} className="w-full">
             {isPending ? "Signing in..." : "Sign in"}
           </Button>
         </form>
 
         <p className="text-center text-sm text-neutral-400">
           Don&apos;t have an account?{" "}
-          <Link href="/sign-up" className="text-blue-400 hover:underline">
+          <Link
+            href="/sign-up"
+            aria-disabled={isBusy}
+            tabIndex={isBusy ? -1 : undefined}
+            className={`text-blue-400 hover:underline ${
+              isBusy ? "pointer-events-none opacity-60" : ""
+            }`}
+          >
             Sign up
           </Link>
         </p>
