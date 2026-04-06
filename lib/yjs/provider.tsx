@@ -4,7 +4,6 @@ import {
   createContext,
   useContext,
   useEffect,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -26,6 +25,7 @@ interface YjsContextValue {
 }
 
 const YjsContext = createContext<YjsContextValue | null>(null);
+let cachedAuthToken: string | undefined;
 
 // ---------------------------------------------------------------------------
 // Provider component
@@ -41,17 +41,14 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:4444";
 export function YjsProvider({ sceneId, children }: YjsProviderProps) {
   const { data: session } = useSession();
   const [ctx, setCtx] = useState<YjsContextValue | null>(null);
-
   const token = session?.session?.token;
+  const stableToken = token ?? cachedAuthToken;
 
-  // Stabilize token: once we have a valid token, keep it even if useSession()
-  // temporarily returns undefined (HMR, session refetch, etc.). This prevents
-  // the entire component tree from unmounting on transient session gaps.
-  const stableTokenRef = useRef<string | undefined>(undefined);
-  if (token) {
-    stableTokenRef.current = token;
-  }
-  const stableToken = stableTokenRef.current;
+  useEffect(() => {
+    if (token) {
+      cachedAuthToken = token;
+    }
+  }, [token]);
 
   useEffect(() => {
     if (!stableToken) return;

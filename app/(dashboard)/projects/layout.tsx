@@ -1,4 +1,3 @@
-import Projects from "@/components/projectComponents/Projects"
 import TopBanner from "@/components/projectComponents/TopBanner"
 
 export default function EditorLayout({

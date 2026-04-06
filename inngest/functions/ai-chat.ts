@@ -1,6 +1,5 @@
 import { inngest } from "../client";
 import { createOpenAI } from "@ai-sdk/openai";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { generateText, tool, jsonSchema, stepCountIs } from "ai";
 import * as Sentry from "@sentry/nextjs";
 import type { Prisma } from "@prisma/client";
@@ -46,10 +45,7 @@ export const aiChatFunction = inngest.createFunction(
     };
 
     const result = await step.run("generate", async () => {
-      const isGemini = model.startsWith("gemini");
-      const provider = isGemini
-        ? createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY })
-        : createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
       // Mutable scene state so list_objects reflects additions/deletions mid-conversation
       const liveScene: SceneObject[] = sceneContext.map((o) => ({ ...o }));
@@ -83,14 +79,26 @@ export const aiChatFunction = inngest.createFunction(
               properties: {
                 geometry: {
                   type: "string",
-                  enum: ["box", "sphere", "cylinder", "cone", "torus", "plane", "circle", "icosahedron"],
+                  enum: [
+                    "box",
+                    "sphere",
+                    "cylinder",
+                    "cone",
+                    "torus",
+                    "plane",
+                    "circle",
+                    "icosahedron",
+                  ],
                 },
                 name: { type: "string" },
               },
               required: ["geometry"],
             }),
             execute: async (input) => {
-              const { geometry, name } = input as { geometry: string; name?: string };
+              const { geometry, name } = input as {
+                geometry: string;
+                name?: string;
+              };
               const id = crypto.randomUUID();
               const resolvedName = name ?? geometry;
               liveScene.push({ id, geometry, name: resolvedName });
@@ -122,7 +130,10 @@ export const aiChatFunction = inngest.createFunction(
               required: ["objectId", "newName"],
             }),
             execute: async (input) => {
-              const { objectId, newName } = input as { objectId: string; newName: string };
+              const { objectId, newName } = input as {
+                objectId: string;
+                newName: string;
+              };
               const obj = liveScene.find((o) => o.id === objectId);
               if (obj) obj.name = newName;
               return { ok: true, objectId, newName };
@@ -134,9 +145,15 @@ export const aiChatFunction = inngest.createFunction(
               type: "object" as const,
               properties: {
                 objectId: { type: "string" },
-                px: { type: "number" }, py: { type: "number" }, pz: { type: "number" },
-                rx: { type: "number" }, ry: { type: "number" }, rz: { type: "number" },
-                sx: { type: "number" }, sy: { type: "number" }, sz: { type: "number" },
+                px: { type: "number" },
+                py: { type: "number" },
+                pz: { type: "number" },
+                rx: { type: "number" },
+                ry: { type: "number" },
+                rz: { type: "number" },
+                sx: { type: "number" },
+                sy: { type: "number" },
+                sz: { type: "number" },
               },
               required: ["objectId"],
             }),
@@ -155,7 +172,10 @@ export const aiChatFunction = inngest.createFunction(
               required: ["objectId", "color"],
             }),
             execute: async (input) => {
-              const { objectId, color } = input as { objectId: string; color: string };
+              const { objectId, color } = input as {
+                objectId: string;
+                color: string;
+              };
               return { ok: true, objectId, color };
             },
           }),
@@ -171,7 +191,11 @@ export const aiChatFunction = inngest.createFunction(
               const original = liveScene.find((o) => o.id === objectId);
               if (original) {
                 const newId = crypto.randomUUID();
-                liveScene.push({ id: newId, geometry: original.geometry, name: `${original.name} copy` });
+                liveScene.push({
+                  id: newId,
+                  geometry: original.geometry,
+                  name: `${original.name} copy`,
+                });
                 return { ok: true, originalId: objectId, newId };
               }
               return { ok: false, error: "Object not found" };
@@ -186,10 +210,11 @@ export const aiChatFunction = inngest.createFunction(
           const input = (tc as unknown as { input: unknown }).input;
           return { toolName: tc.toolName, input };
         });
-        const toolResults = s.toolResults?.map((tr) => ({
-          toolName: tr.toolName,
-          output: (tr as unknown as { output: unknown }).output,
-        })) ?? [];
+        const toolResults =
+          s.toolResults?.map((tr) => ({
+            toolName: tr.toolName,
+            output: (tr as unknown as { output: unknown }).output,
+          })) ?? [];
         return {
           step: i,
           text: s.text,
@@ -204,12 +229,23 @@ export const aiChatFunction = inngest.createFunction(
       for (const s of aiResult.steps) {
         for (const tc of s.toolCalls) {
           if (tc.toolName === "list_objects") continue;
-          const input = (tc as unknown as { input: unknown }).input as Record<string, unknown>;
+          const input = (tc as unknown as { input: unknown }).input as Record<
+            string,
+            unknown
+          >;
           // For add_object, merge the execute output so the client gets the server-assigned id
           if (tc.toolName === "add_object") {
-            const result = s.toolResults?.find((tr) => tr.toolCallId === tc.toolCallId);
-            const output = result ? (result as unknown as { output: Record<string, unknown> }).output : {};
-            writeCalls.push({ toolName: tc.toolName, args: { ...input, ...output } });
+            const result = s.toolResults?.find(
+              (tr) => tr.toolCallId === tc.toolCallId,
+            );
+            const output = result
+              ? (result as unknown as { output: Record<string, unknown> })
+                  .output
+              : {};
+            writeCalls.push({
+              toolName: tc.toolName,
+              args: { ...input, ...output },
+            });
           } else {
             writeCalls.push({ toolName: tc.toolName, args: input });
           }
@@ -245,7 +281,9 @@ export const aiChatFunction = inngest.createFunction(
           logger.info(`Step ${s.step} tool calls`, { toolCalls: s.toolCalls });
         }
         if (s.toolResults.length > 0) {
-          logger.info(`Step ${s.step} tool results`, { toolResults: s.toolResults });
+          logger.info(`Step ${s.step} tool results`, {
+            toolResults: s.toolResults,
+          });
         }
         if (s.text) {
           logger.info(`Step ${s.step} reasoning`, { text: s.text });
@@ -266,5 +304,5 @@ export const aiChatFunction = inngest.createFunction(
         },
       });
     });
-  }
+  },
 );

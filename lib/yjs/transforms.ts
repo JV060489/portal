@@ -21,7 +21,6 @@ const _quat = new THREE.Quaternion();
 const _scale = new THREE.Vector3();
 const _euler = new THREE.Euler();
 const _mat = new THREE.Matrix4();
-const _parentMat = new THREE.Matrix4();
 const _invParentMat = new THREE.Matrix4();
 
 /** Read px…sz from a Y.Map and build a local TRS matrix. */

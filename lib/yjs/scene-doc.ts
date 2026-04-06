@@ -6,7 +6,6 @@ import {
   type SceneMeta,
   type OldSceneState,
   sceneStateSchema,
-  DEFAULT_SCENE_STATE,
   DEFAULT_CUBE_ID,
   DEFAULT_META,
   DEFAULT_CAMERA,

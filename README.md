@@ -1,36 +1,48 @@
 # Portal
 
-**A collaborative 3D design tool for building and editing 3D scenes in the browser with AI-assisted workflows and real-time collaboration.**
+**An AI-assisted browser-based 3D scene editor built with a collaboration-ready architecture.**
 
-Portal combines a powerful browser-based 3D editor with AI-assisted design capabilities and real-time collaboration. Designers can create, transform, and manage 3D scenes directly in the browser.
+Portal is a full-stack web application for creating and editing 3D scenes directly in the browser. It combines an interactive 3D editor, natural-language scene manipulation, authenticated workflows, and asynchronous AI job processing. The system is also designed with real-time collaboration foundations using Yjs and WebSockets.
 
 ---
 
 ## Features
 
-- [x] **3D Editor** — Browser-based 3D scene editor built with React Three Fiber, supporting object manipulation, camera controls, and scene hierarchy management
-- [x] **Real-Time Collaboration** — YJS-powered CRDT sync over WebSockets for seamless multi-user editing with conflict-free state management
-- [x] **AI / NLI / LLM Integration** — Natural language interface powered by Vercel AI SDK and assistant-ui, enabling conversational scene editing and design assistance
-- [x] **Shape Operations** — Add, transform (translate, rotate, scale), and change colors of 3D shapes directly in the editor
-- [ ] **Sketchfab Asset Import** — Import 3D assets from the Sketchfab API library directly into your scenes
-- [ ] **AI Model Generation** — Generate 3D models using the Hyper Rodin API for rapid prototyping
-- [ ] **AI-Powered Reasoning** — Use AI to reason through and orchestrate Sketchfab imports, model generation, and scene composition via connected tools
-- [ ] **Physics Engine** — Lightweight physics simulation to validate and test AI-generated scene outputs
+- [x] **Browser-Based 3D Editor** - Create and edit scenes with React Three Fiber, object transforms, camera controls, and scene hierarchy management
+- [x] **AI Scene Editing** - Use natural language to add, rename, duplicate, recolor, and transform objects in the scene
+- [x] **Async AI Workflow Pipeline** - Queue AI requests through API routes and Inngest jobs for reliable background processing
+- [x] **Authentication and User Isolation** - Secure access with Better Auth plus per-user AI job tracking and limits
+- [x] **Collaboration-Ready Foundation** - Real-time sync infrastructure is in place with Yjs documents and a WebSocket server
+- [ ] **Sketchfab Asset Import** - Import external 3D assets into scenes
+- [ ] **AI Model Generation** - Generate 3D models for rapid prototyping
+- [ ] **AI Tool Orchestration** - Expand the assistant to reason across external asset and generation tools
+- [ ] **Physics Validation** - Simulate and validate generated scene outputs
 
 ---
 
 ## Architecture
 
-Portal is composed of two interconnected systems:
+Portal is composed of three cooperating layers:
 
-- **Web App (Next.js)** - 3D editor, AI chat UI, project management, authentication, and database-backed workflows
-- **CRDT Sync Layer** - YJS state synchronization over WebSockets for shared real-time editing sessions
+- **Web App (Next.js)** - 3D editor, AI chat UI, authentication, project workflows, and API endpoints
+- **Async AI Layer (Inngest)** - Background job execution for AI requests, tool calling, and result persistence
+- **Realtime Sync Layer (Yjs + WebSockets)** - Shared document infrastructure for collaborative scene state synchronization
+
+---
+
+## Why This Project Stands Out
+
+- Demonstrates full-stack product thinking across frontend interaction design, backend workflows, authentication, and database integration
+- Uses AI in a practical way: the model issues structured tool calls that map to concrete scene mutations
+- Separates user-facing requests from AI execution through an async job pipeline instead of blocking the request cycle
+- Shows readiness for collaborative editing through Yjs/WebSocket architecture without overstating unfinished product surface area
 
 ---
 
 ## Tech Stack
 
 ### Frontend
+
 | Technology | Purpose |
 |---|---|
 | Next.js 16 | App Router, Turbopack |
@@ -43,6 +55,7 @@ Portal is composed of two interconnected systems:
 | react-arborist | Scene tree / project hierarchy |
 
 ### Backend
+
 | Technology | Purpose |
 |---|---|
 | Next.js API Routes | Server endpoints |
@@ -51,15 +64,10 @@ Portal is composed of two interconnected systems:
 | Prisma 6.19 | ORM |
 | Better Auth | Authentication (email/password, Google OAuth) |
 | Inngest | Background jobs and event-driven functions |
-
-### Real-Time
-| Technology | Purpose |
-|---|---|
-| YJS | CRDT-based state synchronization |
-| WebSockets (ws) | Transport layer for real-time sync |
-| y-websocket | YJS WebSocket provider |
+| Yjs + WebSockets | Realtime shared-state synchronization |
 
 ### AI
+
 | Technology | Purpose |
 |---|---|
 | Vercel AI SDK | LLM integration |
@@ -68,6 +76,7 @@ Portal is composed of two interconnected systems:
 | MCP TypeScript SDK | Model Context Protocol for tool orchestration |
 
 ### Monitoring
+
 | Technology | Purpose |
 |---|---|
 | Sentry | Error tracking and performance monitoring |
@@ -79,18 +88,15 @@ Portal is composed of two interconnected systems:
 ### Prerequisites
 
 - **Node.js** >= 20
-- **pnpm** (package manager)
-- **MongoDB Atlas** account (or local MongoDB instance)
-- **Google OAuth** credentials (optional, for social login)
+- **pnpm**
+- **MongoDB Atlas** account or local MongoDB instance
+- **Google OAuth** credentials (optional)
 
 ### Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/JV060489/portal.git
 cd portal
-
-# Install dependencies
 pnpm install
 ```
 
@@ -114,32 +120,24 @@ GOOGLE_CLIENT_SECRET="your-google-client-secret"
 ### Database Setup
 
 ```bash
-# Push the Prisma schema to MongoDB
 pnpm exec prisma db push
-
-# Generate the Prisma client
 pnpm exec prisma generate
 ```
 
-> **Important:** Always use `pnpm exec prisma` instead of `npx prisma`. The project uses Prisma 6.19 locally, and npx may resolve to an incompatible v7.
+> **Important:** Use `pnpm exec prisma` instead of `npx prisma`. The project uses Prisma 6.19 locally, and `npx` may resolve to an incompatible version.
 
 ### Running the Application
 
 ```bash
-# Start everything (Next.js dev server + WebSocket server + Inngest dev server)
+# Next.js dev server + WebSocket server + Inngest dev server
 pnpm dev:all
 ```
 
 Or run services individually:
 
 ```bash
-# Next.js dev server only
 pnpm dev
-
-# WebSocket server only
 pnpm dev:ws
-
-# Inngest dev server only
 npx inngest-cli@latest dev
 ```
 
@@ -149,32 +147,32 @@ Open [http://localhost:3000](http://localhost:3000) to access the application.
 
 ## Project Structure
 
-```
+```text
 app/
-├── page.tsx                        # Landing page
-├── layout.tsx                      # Root layout (Lexend font)
-├── globals.css                     # Global styles
-├── (auth)/
-│   ├── sign-in/page.tsx            # Sign-in page
-│   └── sign-up/page.tsx            # Sign-up page
-├── api/
-│   └── auth/[...all]/route.ts      # Better Auth API handler
-└── editor/
-    ├── page.tsx                    # Editor page
-    ├── layout.tsx                  # Editor layout (banner + sidebar + canvas)
-    └── _components/
-        ├── Projects.tsx            # Project/scene tree sidebar
-        └── TopBanner.tsx           # Welcome banner + logout
+|-- page.tsx                        # Landing page
+|-- layout.tsx                      # Root layout
+|-- globals.css                     # Global styles
+|-- (auth)/
+|   |-- sign-in/page.tsx            # Sign-in page
+|   `-- sign-up/page.tsx            # Sign-up page
+|-- api/
+|   `-- auth/[...all]/route.ts      # Better Auth API handler
+`-- editor/
+    |-- page.tsx                    # Editor page
+    |-- layout.tsx                  # Editor layout
+    `-- _components/
+        |-- Projects.tsx            # Project/scene tree sidebar
+        `-- TopBanner.tsx           # Welcome banner + logout
 
 lib/
-├── auth.ts                         # Better Auth server config
-└── auth-client.ts                  # Better Auth React client
+|-- auth.ts                         # Better Auth server config
+`-- auth-client.ts                  # Better Auth React client
 
 server/
-└── ws-server.ts                    # WebSocket server for YJS sync
+`-- ws-server.ts                    # WebSocket server for Yjs sync
 
 prisma/
-└── schema.prisma                   # MongoDB schema (User, Session, Account, Verification)
+`-- schema.prisma                   # MongoDB schema
 
 middleware.ts                       # Auth guard for /editor routes
 ```
@@ -185,13 +183,13 @@ middleware.ts                       # Auth guard for /editor routes
 
 | Command | Description |
 |---|---|
-| `pnpm dev` | Start Next.js development server |
-| `pnpm dev:ws` | Start WebSocket server for real-time sync |
-| `pnpm dev:all` | Start all services concurrently |
-| `pnpm build` | Production build (generates Prisma client, pushes schema, builds Next.js) |
-| `pnpm start` | Start production server |
+| `pnpm dev` | Start the Next.js development server |
+| `pnpm dev:ws` | Start the WebSocket server for sync |
+| `pnpm dev:all` | Start all local services concurrently |
+| `pnpm build` | Generate Prisma client, push schema, and build Next.js |
+| `pnpm start` | Start the production server |
 | `pnpm lint` | Run ESLint |
-| `pnpm exec prisma studio` | Open Prisma Studio (database GUI) |
+| `pnpm exec prisma studio` | Open Prisma Studio |
 | `pnpm exec prisma db push` | Push schema changes to MongoDB |
 
 ---
@@ -199,14 +197,13 @@ middleware.ts                       # Auth guard for /editor routes
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/your-feature`)
-3. Commit your changes (`git commit -m 'Add your feature'`)
-4. Push to the branch (`git push origin feature/your-feature`)
-5. Open a Pull Request
+2. Create a feature branch with `git checkout -b feature/your-feature`
+3. Commit your changes
+4. Push the branch
+5. Open a pull request
 
 ---
 
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-

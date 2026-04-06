@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { PrismaClient } from "@prisma/client";
-import { docToJSON, initializeDoc, isDocEmpty, migrateOldState } from "@/lib/yjs/scene-doc";
+import { docToJSON, initializeDoc, migrateOldState } from "@/lib/yjs/scene-doc";
 import { DEFAULT_SCENE_STATE } from "@/lib/yjs/types";
 
 // ---------------------------------------------------------------------------

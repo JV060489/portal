@@ -2,8 +2,9 @@ import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { inngest } from "@/inngest/client";
+import { AI_MESSAGE_LIMIT, buildAiMessageLimitError } from "@/lib/ai/limits";
 
-const ALLOWED_MODELS = ["gpt-5-nano", "gpt-5.4-nano", "gpt-5.4-mini", "gemini-2.5-flash", "gemini-2.5-pro"];
+const ALLOWED_MODELS = ["gpt-5-nano", "gpt-5.4-nano", "gpt-5.4-mini"];
 
 export async function POST(req: Request) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -16,6 +17,19 @@ export async function POST(req: Request) {
   const selectedModel = ALLOWED_MODELS.includes(model) ? model : "gpt-5-nano";
   const jobId = crypto.randomUUID();
   const userId = session.user.id;
+  const messageCount = await prisma.aiJobResult.count({
+    where: { userId },
+  });
+
+  if (messageCount >= AI_MESSAGE_LIMIT) {
+    return Response.json(
+      {
+        error: buildAiMessageLimitError(),
+        limit: AI_MESSAGE_LIMIT,
+      },
+      { status: 429 },
+    );
+  }
 
   await prisma.aiJobResult.create({
     data: { jobId, userId, status: "pending" },

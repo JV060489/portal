@@ -30,15 +30,19 @@ const MODELS = [
   { id: "gpt-5-nano", label: "GPT-5 Nano" },
   { id: "gpt-5.4-nano", label: "GPT-5.4 Nano" },
   { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
 ] as const;
 
 // ---------------------------------------------------------------------------
 // AiChatBox
 // ---------------------------------------------------------------------------
 
-export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCollapse: (v: boolean) => void }) {
+export function AiChatBox({
+  collapsed,
+  onCollapse,
+}: {
+  collapsed: boolean;
+  onCollapse: (v: boolean) => void;
+}) {
   const { doc, sceneMap, connected } = useYjs();
   const objects = useYjsObjects();
   const addObject = useYjsAddObject();
@@ -55,6 +59,8 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const activePollRequestRef = useRef(false);
+  const completedJobIdsRef = useRef<Set<string>>(new Set());
 
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
@@ -102,11 +108,23 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
         }
         case "update_transform": {
           if (!connected) break;
-          const objectsMap = sceneMap.get("objects") as Y.Map<Y.Map<unknown>> | undefined;
+          const objectsMap = sceneMap.get("objects") as
+            | Y.Map<Y.Map<unknown>>
+            | undefined;
           const objMap = objectsMap?.get(args.objectId as string);
           if (!objMap) break;
           doc.transact(() => {
-            const fields = ["px", "py", "pz", "rx", "ry", "rz", "sx", "sy", "sz"] as const;
+            const fields = [
+              "px",
+              "py",
+              "pz",
+              "rx",
+              "ry",
+              "rz",
+              "sx",
+              "sy",
+              "sz",
+            ] as const;
             for (const key of fields) {
               if (args[key] !== undefined) objMap.set(key, args[key]);
             }
@@ -115,7 +133,9 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
         }
         case "change_color": {
           if (!connected) break;
-          const objectsMap = sceneMap.get("objects") as Y.Map<Y.Map<unknown>> | undefined;
+          const objectsMap = sceneMap.get("objects") as
+            | Y.Map<Y.Map<unknown>>
+            | undefined;
           const objMap = objectsMap?.get(args.objectId as string);
           if (!objMap) break;
           doc.transact(() => {
@@ -131,7 +151,15 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
           break;
       }
     },
-    [doc, sceneMap, connected, addObject, deleteObject, renameObject, duplicateObject]
+    [
+      doc,
+      sceneMap,
+      connected,
+      addObject,
+      deleteObject,
+      renameObject,
+      duplicateObject,
+    ],
   );
 
   // ---------------------------------------------------------------------------
@@ -141,12 +169,22 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
   useEffect(() => {
     if (!jobId) return;
 
+    activePollRequestRef.current = false;
+
     const intervalId = setInterval(async () => {
+      if (activePollRequestRef.current || completedJobIdsRef.current.has(jobId))
+        return;
+
+      activePollRequestRef.current = true;
+
       try {
         const res = await fetch(`/api/chat/status?jobId=${jobId}`);
         const data = await res.json();
 
         if (data.status === "done") {
+          if (completedJobIdsRef.current.has(jobId)) return;
+
+          completedJobIdsRef.current.add(jobId);
           clearInterval(intervalId);
           const toolCalls = (data.toolCalls ?? []) as ToolCall[];
           for (const tc of toolCalls) {
@@ -157,7 +195,10 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
             (toolCalls.length > 0
               ? toolCalls.map((tc) => `Called ${tc.toolName}`).join(", ") + "."
               : "Done.");
-          setMessages((prev) => [...prev, { role: "assistant", content: assistantText }]);
+          setMessages((prev) => [
+            ...prev,
+            { role: "assistant", content: assistantText },
+          ]);
           setIsLoading(false);
           setJobId(null);
         } else if (data.status === "error") {
@@ -174,6 +215,8 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
         setIsLoading(false);
         setJobId(null);
         Sentry.captureException(err);
+      } finally {
+        activePollRequestRef.current = false;
       }
     }, 1000);
 
@@ -192,7 +235,10 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
     setError(null);
     setIsLoading(true);
 
-    const newMessages: Message[] = [...messages, { role: "user", content: text }];
+    const newMessages: Message[] = [
+      ...messages,
+      { role: "user", content: text },
+    ];
     setMessages(newMessages);
 
     try {
@@ -202,18 +248,28 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
         body: JSON.stringify({
           messages: newMessages,
           model: selectedModel,
-          sceneContext: objects.map((o) => ({ id: o.id, name: o.name, geometry: o.geometry })),
+          sceneContext: objects.map((o) => ({
+            id: o.id,
+            name: o.name,
+            geometry: o.geometry,
+          })),
         }),
       });
 
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
       }
 
       const { jobId: newJobId } = await res.json();
       setJobId(newJobId);
     } catch (err) {
-      setError("Failed to send message");
+      setMessages(messages);
+      const message =
+        err instanceof Error ? err.message : "Failed to send message";
+      setError(message);
       setIsLoading(false);
       Sentry.captureException(err);
     }
@@ -248,7 +304,11 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
               stroke="currentColor"
               strokeWidth={2}
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M13 5l7 7-7 7M5 5l7 7-7 7"
+              />
             </svg>
           </Button>
           {!collapsed && (
@@ -324,7 +384,11 @@ export function AiChatBox({ collapsed, onCollapse }: { collapsed: boolean; onCol
               onKeyDown={handleKeyDown}
               disabled={isLoading}
               rows={1}
-              placeholder="Ask AI to edit the scene..."
+              placeholder={
+                isLoading
+                  ? "AI is responding..."
+                  : "Ask AI to edit the scene..."
+              }
               className="flex-1 resize-none overflow-hidden bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
               style={{ minHeight: "2.25rem", maxHeight: "10rem" }}
             />

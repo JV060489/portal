@@ -7,13 +7,12 @@
     "dev": "next dev",
     "dev:ws": "tsx --watch-path=server --watch-path=lib/yjs server/ws-server.ts",
     "dev:all": "concurrently \"pnpm dev\" \"pnpm dev:ws\" \"npx inngest-cli@latest dev\"",
-    "build": "pnpm exec prisma generate && pnpm exec prisma db push && next build",
+    "build": "pnpm exec prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
     "postinstall": "pnpm exec prisma generate"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.52",
     "@ai-sdk/openai": "^3.0.47",
     "@base-ui/react": "^1.2.0",
     "@prisma/client": "~6.19.2",
