@@ -1,8 +1,8 @@
 # Portal
 
-**A collaborative 3D design tool that bridges a web-based editor with Blender via live sync, enabling designers to work on 3D scenes in the browser and synchronize changes bidirectionally with Blender.**
+**A collaborative 3D design tool for building and editing 3D scenes in the browser with AI-assisted workflows and real-time collaboration.**
 
-Portal combines a powerful browser-based 3D editor with AI-assisted design capabilities and real-time collaboration. Designers can create, transform, and manage 3D scenes directly in the browser while maintaining a live connection to Blender for professional-grade workflows.
+Portal combines a powerful browser-based 3D editor with AI-assisted design capabilities and real-time collaboration. Designers can create, transform, and manage 3D scenes directly in the browser.
 
 ---
 
@@ -16,26 +16,15 @@ Portal combines a powerful browser-based 3D editor with AI-assisted design capab
 - [ ] **AI Model Generation** — Generate 3D models using the Hyper Rodin API for rapid prototyping
 - [ ] **AI-Powered Reasoning** — Use AI to reason through and orchestrate Sketchfab imports, model generation, and scene composition via connected tools
 - [ ] **Physics Engine** — Lightweight physics simulation to validate and test AI-generated scene outputs
-- [ ] **Blender Integration** — Bidirectional sync with Blender through a custom Python plugin, enabling professional-grade editing workflows alongside the web editor
 
 ---
 
 ## Architecture
 
-Portal is composed of three interconnected systems:
+Portal is composed of two interconnected systems:
 
-```
-┌─────────────────────┐       WebSocket / YJS        ┌─────────────────────┐
-│                     │◄────────────────────────────► │                     │
-│    Web App          │       CRDT Sync Layer         │   Blender Plugin    │
-│    (Next.js)        │                               │   (Python)          │
-│                     │                               │                     │
-│  - 3D Editor (R3F)  │                               │  - MCP Server       │
-│  - AI Chat UI       │                               │  - Scene Sync       │
-│  - Project Mgmt     │                               │  - Bidirectional    │
-│  - Auth & DB        │                               │    Data Exchange    │
-└─────────────────────┘                               └─────────────────────┘
-```
+- **Web App (Next.js)** - 3D editor, AI chat UI, project management, authentication, and database-backed workflows
+- **CRDT Sync Layer** - YJS state synchronization over WebSockets for shared real-time editing sessions
 
 ---
 
@@ -50,7 +39,6 @@ Portal is composed of three interconnected systems:
 | React Three Fiber | 3D rendering |
 | drei | R3F helpers and abstractions |
 | Leva | Runtime controls / debug panel |
-| Zustand | State management (slices pattern) |
 | Framer Motion | Editor UI animations |
 | react-arborist | Scene tree / project hierarchy |
 
@@ -221,3 +209,4 @@ middleware.ts                       # Auth guard for /editor routes
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+

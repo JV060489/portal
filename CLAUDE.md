@@ -16,7 +16,6 @@ Portal consists of two main systems connected by a real-time sync layer:
 - **Framework:** Next.js 16 (App Router, Turbopack)
 - **UI:** React 19, Tailwind CSS v4
 - **3D:** React Three Fiber (R3F), drei, Leva (controls)
-- **State:** Zustand (slices pattern)
 - **Animation:** Framer Motion (editor UI), GSAP (landing page)
 - **Tree View:** react-arborist (scene collection / project tree)
 
