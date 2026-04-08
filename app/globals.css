@@ -168,3 +168,57 @@
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes glow-border-spin {
+  to {
+    --border-angle: 360deg;
+  }
+}
+
+@keyframes living-card-breathe-a {
+  0%, 100% {
+    border-radius: 28% 72% 64% 36% / 35% 37% 63% 65%;
+  }
+  50% {
+    border-radius: 34% 66% 58% 42% / 41% 31% 69% 59%;
+  }
+}
+
+@keyframes living-card-breathe-b {
+  0%, 100% {
+    border-radius: 58% 42% 33% 67% / 38% 46% 54% 62%;
+  }
+  50% {
+    border-radius: 52% 48% 39% 61% / 45% 39% 61% 55%;
+  }
+}
+
+@keyframes living-card-breathe-c {
+  0%, 100% {
+    border-radius: 45% 55% 61% 39% / 41% 60% 40% 59%;
+  }
+  50% {
+    border-radius: 51% 49% 55% 45% / 48% 54% 46% 52%;
+  }
+}
+
+.living-card {
+  transform-style: preserve-3d;
+  will-change: transform, border-radius;
+}
+
+.living-card-0 {
+  animation: living-card-breathe-a 7s ease-in-out infinite;
+}
+
+.living-card-1 {
+  animation: living-card-breathe-b 8s ease-in-out infinite;
+}
+
+.living-card-2 {
+  animation: living-card-breathe-c 7.5s ease-in-out infinite;
+}
+
+.glow-border-spin {
+  animation: glow-border-spin 5s linear infinite;
+}
