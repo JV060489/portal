@@ -111,7 +111,12 @@ export function LivingCard({
         onKeyDown={isInteractive ? handleCardKeyDown : undefined}
         tabIndex={isInteractive ? 0 : undefined}
         role={isInteractive ? "link" : undefined}
-        style={{ rotateX, rotateY, aspectRatio: aspectRatio !== "video" && aspectRatio ? aspectRatio : undefined }}
+        style={{
+          rotateX,
+          rotateY,
+          aspectRatio:
+            aspectRatio !== "video" && aspectRatio ? aspectRatio : undefined,
+        }}
         className={cn(
           "relative overflow-hidden rounded-2xl w-full h-full border border-neutral-800 md:border-transparent",
           aspectRatio === "video" ? "aspect-video" : undefined,
