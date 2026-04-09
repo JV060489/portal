@@ -13,10 +13,70 @@ Rules:
 - Think carefully before acting, especially for complex objects, multi-object layouts, relative positioning, spacing, symmetry, stacking, and rotations.
 - Do the calculation properly before calling tools. Work out positions, offsets, dimensions, and rotation values step by step, then use the final computed numbers in tool calls.
 - If the request depends on object relationships or exact placement, inspect the scene first and avoid guessing.
-- Call list_objects first if you need IDs.
+- Call list_objects first if you need IDs or spatial context.
+- Use object bounds and anchors for placement instead of guessing offsets.
+- If a newly generated object does not have bounds yet, create it first and do not pretend you know its exact final size.
 - After mutations, confirm in one short sentence.`;
 
-type SceneObject = { id: string; name: string; geometry: string };
+const OPENSCAD_CODE_PROMPT = `You generate only valid OpenSCAD for a single 3D object.
+
+Rules:
+- Return only raw OpenSCAD code.
+- The model must be a single printable 3D object.
+- Use clear top-level parameters for important dimensions.
+- Author the model in OpenSCAD's native Z-up coordinate system.
+- Make the object stand upright with its base resting on the z=0 plane.
+- Keep the footprint centered near the origin in X and Y so preview placement is stable.
+- Avoid wrapping the whole model in a final arbitrary rotate() unless the prompt explicitly requires it.
+- Prefer sensible, compact dimensions and avoid extremely tiny or extremely huge values.
+- Do not include colors or rendering notes.
+- Do not include markdown fences.
+- Prefer clean constructive solid geometry that compiles reliably in OpenSCAD.`;
+
+type SceneObject = {
+  id: string;
+  name: string;
+  geometry: string;
+  geometryKind?: "primitive" | "generated";
+  sourceKind?: "openscad";
+  parentId?: string;
+  px?: number;
+  py?: number;
+  pz?: number;
+  rx?: number;
+  ry?: number;
+  rz?: number;
+  sx?: number;
+  sy?: number;
+  sz?: number;
+  localBounds?: unknown;
+  worldBounds?: unknown;
+  worldAnchors?: unknown;
+  generatedPrompt?: string;
+};
+
+type InputMessage = {
+  role: string;
+  content: string;
+};
+
+async function generateOpenScadCode(
+  model: string,
+  provider: ReturnType<typeof createOpenAI>,
+  prompt: string,
+): Promise<string> {
+  const result = await generateText({
+    model: provider(model),
+    system: OPENSCAD_CODE_PROMPT,
+    prompt,
+    temperature: 0.2,
+  });
+
+  return result.text
+    .replace(/^```(?:openscad)?\s*/i, "")
+    .replace(/```$/, "")
+    .trim();
+}
 
 export const aiChatFunction = inngest.createFunction(
   {
@@ -38,7 +98,7 @@ export const aiChatFunction = inngest.createFunction(
   async ({ event, step, logger }) => {
     const { jobId, messages, model, sceneContext, userId } = event.data as {
       jobId: string;
-      messages: { role: string; content: string }[];
+      messages: InputMessage[];
       model: string;
       sceneContext: SceneObject[];
       userId: string;
@@ -53,8 +113,7 @@ export const aiChatFunction = inngest.createFunction(
       const aiResult = await generateText({
         model: provider(model),
         system: SYSTEM_PROMPT,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        messages: messages as any,
+        messages,
         stopWhen: stepCountIs(10),
         experimental_telemetry: {
           isEnabled: true,
@@ -72,37 +131,47 @@ export const aiChatFunction = inngest.createFunction(
             }),
             execute: async () => ({ objects: liveScene }),
           }),
-          add_object: tool({
-            description: "Add a mesh to the scene.",
+          generate_openscad_object: tool({
+            description:
+              "Generate a new OpenSCAD-backed object for the scene. Use this when the user asks to create a model or part.",
             inputSchema: jsonSchema({
               type: "object" as const,
               properties: {
-                geometry: {
-                  type: "string",
-                  enum: [
-                    "box",
-                    "sphere",
-                    "cylinder",
-                    "cone",
-                    "torus",
-                    "plane",
-                    "circle",
-                    "icosahedron",
-                  ],
-                },
+                prompt: { type: "string" },
                 name: { type: "string" },
               },
-              required: ["geometry"],
+              required: ["prompt"],
             }),
             execute: async (input) => {
-              const { geometry, name } = input as {
-                geometry: string;
+              const { prompt, name } = input as {
+                prompt: string;
                 name?: string;
               };
+              const openscadCode = await generateOpenScadCode(
+                model,
+                provider,
+                prompt,
+              );
               const id = crypto.randomUUID();
-              const resolvedName = name ?? geometry;
-              liveScene.push({ id, geometry, name: resolvedName });
-              return { ok: true, id, geometry, name: resolvedName };
+              const resolvedName = name ?? "Generated Object";
+              liveScene.push({
+                id,
+                geometry: "generated",
+                geometryKind: "generated",
+                sourceKind: "openscad",
+                name: resolvedName,
+                generatedPrompt: prompt,
+              });
+              return {
+                ok: true,
+                id,
+                name: resolvedName,
+                geometry: "generated",
+                geometryKind: "generated",
+                sourceKind: "openscad",
+                generatedPrompt: prompt,
+                openscadCode,
+              };
             },
           }),
           delete_object: tool({
@@ -158,7 +227,13 @@ export const aiChatFunction = inngest.createFunction(
               required: ["objectId"],
             }),
             execute: async (input) => {
-              return { ok: true, ...(input as object) };
+              const payload = input as Record<string, unknown>;
+              const objectId = payload.objectId as string;
+              const target = liveScene.find((obj) => obj.id === objectId);
+              if (target) {
+                Object.assign(target, payload);
+              }
+              return { ok: true, ...payload };
             },
           }),
           change_color: tool({
@@ -192,8 +267,8 @@ export const aiChatFunction = inngest.createFunction(
               if (original) {
                 const newId = crypto.randomUUID();
                 liveScene.push({
+                  ...original,
                   id: newId,
-                  geometry: original.geometry,
                   name: `${original.name} copy`,
                 });
                 return { ok: true, originalId: objectId, newId };
@@ -233,8 +308,7 @@ export const aiChatFunction = inngest.createFunction(
             string,
             unknown
           >;
-          // For add_object, merge the execute output so the client gets the server-assigned id
-          if (tc.toolName === "add_object") {
+          if (tc.toolName === "generate_openscad_object") {
             const result = s.toolResults?.find(
               (tr) => tr.toolCallId === tc.toolCallId,
             );

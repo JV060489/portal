@@ -10,6 +10,8 @@ import {
   DEFAULT_META,
   DEFAULT_CAMERA,
   DEFAULT_CUBE,
+  getPrimitiveLocalBounds,
+  type ShapeGeometry,
 } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -61,6 +63,7 @@ export function migrateOldState(
       [DEFAULT_CUBE_ID]: {
         type: "mesh",
         geometry: "box",
+        geometryKind: "primitive",
         name: "Cube",
         px: cubePos[0],
         py: cubePos[1],
@@ -72,6 +75,10 @@ export function migrateOldState(
         sy: cubeScale[1],
         sz: cubeScale[2],
         materialColor: "#4f8fff",
+        localBounds: getPrimitiveLocalBounds("box"),
+        boundsVersion: 1,
+        geometryRevision: 1,
+        compileStatus: "idle",
       },
     },
   };
@@ -153,9 +160,16 @@ export function docToJSON(doc: Y.Doc): SceneStateJSON | null {
 
   const objects: Record<string, SceneObjectData> = {};
   objectsMap.forEach((objMap, id) => {
+    const geometry = (objMap.get("geometry") as string) ?? "box";
+    const geometryKind =
+      (objMap.get("geometryKind") as "primitive" | "generated" | undefined) ??
+      "primitive";
     objects[id] = {
       type: (objMap.get("type") as string) ?? "mesh",
-      geometry: (objMap.get("geometry") as string) ?? "box",
+      geometry,
+      geometryKind,
+      sourceKind:
+        (objMap.get("sourceKind") as "openscad" | undefined) ?? undefined,
       name: (objMap.get("name") as string) ?? "Object",
       px: (objMap.get("px") as number) ?? 0,
       py: (objMap.get("py") as number) ?? 0,
@@ -167,6 +181,23 @@ export function docToJSON(doc: Y.Doc): SceneStateJSON | null {
       sy: (objMap.get("sy") as number) ?? 1,
       sz: (objMap.get("sz") as number) ?? 1,
       materialColor: (objMap.get("materialColor") as string) ?? "#ffffff",
+      parentId: (objMap.get("parentId") as string | undefined) ?? undefined,
+      localBounds:
+        (objMap.get("localBounds") as SceneObjectData["localBounds"]) ??
+        (geometryKind === "primitive"
+          ? getPrimitiveLocalBounds(geometry as ShapeGeometry)
+          : undefined),
+      boundsVersion: (objMap.get("boundsVersion") as number) ?? 1,
+      geometryRevision: (objMap.get("geometryRevision") as number) ?? 1,
+      openscadCode:
+        (objMap.get("openscadCode") as string | undefined) ?? undefined,
+      generatedPrompt:
+        (objMap.get("generatedPrompt") as string | undefined) ?? undefined,
+      compileStatus:
+        (objMap.get("compileStatus") as SceneObjectData["compileStatus"]) ??
+        "idle",
+      compileError:
+        (objMap.get("compileError") as string | undefined) ?? undefined,
     };
   });
 

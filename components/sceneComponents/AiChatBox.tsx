@@ -8,18 +8,23 @@ import { Button } from "@/components/ui/button";
 import { useYjs } from "@/lib/yjs/provider";
 import {
   useYjsAddObject,
+  useYjsAddGeneratedObject,
   useYjsDeleteObject,
   useYjsRenameObject,
   useYjsDuplicateObject,
   useYjsObjects,
 } from "@/lib/yjs/hooks";
 import { SHAPES } from "@/lib/yjs/types";
+import { computeWorldBoundsMap } from "@/lib/scene/bounds";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type Message = { role: "user" | "assistant"; content: string };
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 type ToolCall = {
   toolName: string;
@@ -27,6 +32,7 @@ type ToolCall = {
 };
 
 const MODELS = [
+  { id: "gpt-5.4", label: "GPT-5.4" },
   { id: "gpt-5-nano", label: "GPT-5 Nano" },
   { id: "gpt-5.4-nano", label: "GPT-5.4 Nano" },
   { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
@@ -46,11 +52,12 @@ export function AiChatBox({
   const { doc, sceneMap, connected } = useYjs();
   const objects = useYjsObjects();
   const addObject = useYjsAddObject();
+  const addGeneratedObject = useYjsAddGeneratedObject();
   const deleteObject = useYjsDeleteObject();
   const renameObject = useYjsRenameObject();
   const duplicateObject = useYjsDuplicateObject();
 
-  const [selectedModel, setSelectedModel] = useState("gpt-5-nano");
+  const [selectedModel, setSelectedModel] = useState("gpt-5.4");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
@@ -96,6 +103,15 @@ export function AiChatBox({
             "Object";
           const presetId = args.id as string | undefined;
           addObject(geometry, name, presetId);
+          break;
+        }
+        case "generate_openscad_object": {
+          const name = (args.name as string | undefined) ?? "Generated Object";
+          const presetId = args.id as string | undefined;
+          const openscadCode = args.openscadCode as string;
+          const generatedPrompt =
+            (args.generatedPrompt as string | undefined) ?? name;
+          addGeneratedObject(name, openscadCode, generatedPrompt, presetId);
           break;
         }
         case "delete_object": {
@@ -156,6 +172,7 @@ export function AiChatBox({
       sceneMap,
       connected,
       addObject,
+      addGeneratedObject,
       deleteObject,
       renameObject,
       duplicateObject,
@@ -242,17 +259,37 @@ export function AiChatBox({
     setMessages(newMessages);
 
     try {
+      const worldBoundsMap = computeWorldBoundsMap(objects);
       const res = await fetch("/api/chat/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: newMessages,
           model: selectedModel,
-          sceneContext: objects.map((o) => ({
-            id: o.id,
-            name: o.name,
-            geometry: o.geometry,
-          })),
+          sceneContext: objects.map((o) => {
+            const worldSummary = worldBoundsMap.get(o.id);
+            return {
+              id: o.id,
+              name: o.name,
+              geometry: o.geometry,
+              geometryKind: o.geometryKind,
+              sourceKind: o.sourceKind,
+              px: o.px,
+              py: o.py,
+              pz: o.pz,
+              rx: o.rx,
+              ry: o.ry,
+              rz: o.rz,
+              sx: o.sx,
+              sy: o.sy,
+              sz: o.sz,
+              parentId: o.parentId,
+              localBounds: o.localBounds,
+              worldBounds: worldSummary?.bounds,
+              worldAnchors: worldSummary?.anchors,
+              generatedPrompt: o.generatedPrompt,
+            };
+          }),
         }),
       });
 
@@ -346,7 +383,7 @@ export function AiChatBox({
           <div className="flex-1 min-h-0 flex flex-col gap-2 px-3 py-2 overflow-y-auto">
             {messages.length === 0 && !isLoading && (
               <p className="text-xs text-neutral-600 py-2 text-center">
-                Ask me to add, move, rename, or recolor objects in the scene.
+                Ask me to generate models, move them, rename them, or recolor them.
               </p>
             )}
             {messages.map((msg, i) => (
@@ -387,7 +424,7 @@ export function AiChatBox({
               placeholder={
                 isLoading
                   ? "AI is responding..."
-                  : "Ask AI to edit the scene..."
+                  : "Ask AI to generate or edit the scene..."
               }
               className="flex-1 resize-none overflow-hidden bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
               style={{ minHeight: "2.25rem", maxHeight: "10rem" }}

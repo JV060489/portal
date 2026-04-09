@@ -7,7 +7,13 @@ import {
   TransformControls,
   Outlines,
 } from "@react-three/drei";
-import { useRef, useState, useCallback, useEffect, useMemo } from "react";
+import {
+  useRef,
+  useState,
+  useCallback,
+  useEffect,
+  useMemo,
+} from "react";
 import {
   useControls,
   useStoreContext,
@@ -30,6 +36,8 @@ import SceneObjectTree from "@/components/sceneComponents/SceneObjectTree";
 import { AiChatBox } from "@/components/sceneComponents/AiChatBox";
 import { cn } from "@/lib/utils";
 import { useRenameScene } from "@/features/projects/hooks/use-projects";
+import { useOpenScadPreview } from "@/lib/openscad/use-openscad-preview";
+import { sanitizeLocalBounds } from "@/lib/scene/bounds";
 
 
 // ---------------------------------------------------------------------------
@@ -39,11 +47,9 @@ import { useRenameScene } from "@/features/projects/hooks/use-projects";
 function SceneTopBar({
   sceneName,
   sceneId,
-  projectId,
 }: {
   sceneName: string;
   sceneId: string;
-  projectId: string;
 }) {
   const renameScene = useRenameScene();
   const [editing, setEditing] = useState(false);
@@ -138,6 +144,81 @@ function ObjectGeometry({ geometry }: { geometry: string }) {
     default:
       return <boxGeometry args={[1, 1, 1]} />;
   }
+}
+
+function GeneratedMeshContent({
+  objectId,
+  objectData,
+}: {
+  objectId: string;
+  objectData: SceneObjectData;
+}) {
+  const { geometry, bounds, status, error } = useOpenScadPreview(
+    objectData.openscadCode,
+    objectData.geometryRevision ?? 1,
+  );
+  const { writeObjectData } = useYjsObject(objectId);
+
+  useEffect(() => {
+    const currentBounds = sanitizeLocalBounds(objectData.localBounds);
+    const nextBounds = sanitizeLocalBounds(bounds);
+    const currentBoundsJson = currentBounds
+      ? JSON.stringify(currentBounds)
+      : undefined;
+    const nextBoundsJson = nextBounds ? JSON.stringify(nextBounds) : undefined;
+
+    if (status === "compiling" && objectData.compileStatus !== "compiling") {
+      writeObjectData({ compileStatus: "compiling", compileError: undefined });
+      return;
+    }
+
+    if (status === "error" && objectData.compileStatus !== "error") {
+      writeObjectData({
+        compileStatus: "error",
+        compileError: error ?? "OpenSCAD compilation failed.",
+      });
+      return;
+    }
+
+    if (
+      status === "ready" &&
+      (objectData.compileStatus !== "ready" ||
+        currentBoundsJson !== nextBoundsJson ||
+        objectData.compileError)
+    ) {
+      writeObjectData({
+        compileStatus: "ready",
+        compileError: undefined,
+        localBounds: nextBounds,
+      });
+    }
+  }, [
+    bounds,
+    error,
+    objectData.compileError,
+    objectData.compileStatus,
+    objectData.localBounds,
+    status,
+    writeObjectData,
+  ]);
+
+  if (!geometry) return null;
+
+  return <primitive object={geometry} attach="geometry" />;
+}
+
+function SceneMesh({
+  objectId,
+  objectData,
+}: {
+  objectId: string;
+  objectData: SceneObjectData;
+}) {
+  if (objectData.geometryKind === "generated") {
+    return <GeneratedMeshContent objectId={objectId} objectData={objectData} />;
+  }
+
+  return <ObjectGeometry geometry={objectData.geometry} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,9 +334,12 @@ function SceneObject({
   const { observeObject, readObject } = useYjsObject(objectId);
   const { synced } = useYjs();
 
-  // Read YJS state only once on mount for geometry/material
-  const [initial] = useState(() => readObject());
-  const [materialColor, setMaterialColor] = useState(initial?.materialColor ?? "#4f8fff");
+  const [objectData, setObjectData] = useState(
+    () => readObject() ?? null,
+  );
+  const [materialColor, setMaterialColor] = useState(
+    objectData?.materialColor ?? "#4f8fff",
+  );
 
   const setGroupRef = useCallback(
     (node: THREE.Group | null) => {
@@ -266,6 +350,8 @@ function SceneObject({
       if (node) {
         const data = readObject();
         if (data) {
+          setObjectData(data);
+          setMaterialColor(data.materialColor);
           node.position.set(data.px, data.py, data.pz);
           node.rotation.set(data.rx, data.ry, data.rz);
           node.scale.set(data.sx, data.sy, data.sz);
@@ -282,6 +368,11 @@ function SceneObject({
     return observeObject((changes: Partial<SceneObjectData>) => {
       const group = groupRef.current;
       if (!group) return;
+
+      setObjectData((prev) => {
+        if (!prev) return readObject();
+        return { ...prev, ...changes };
+      });
 
       if (changes.materialColor !== undefined) {
         setMaterialColor(changes.materialColor);
@@ -321,7 +412,12 @@ function SceneObject({
         );
       }
     });
-  }, [synced, observeObject]);
+  }, [synced, observeObject, readObject]);
+
+  const canOutline =
+    !objectData ||
+    objectData.geometryKind !== "generated" ||
+    objectData.compileStatus === "ready";
 
   return (
     <group ref={setGroupRef}>
@@ -335,9 +431,13 @@ function SceneObject({
           });
         }}
       >
-        <ObjectGeometry geometry={initial?.geometry ?? "box"} />
+        {objectData ? (
+          <SceneMesh objectId={objectId} objectData={objectData} />
+        ) : (
+          <ObjectGeometry geometry="box" />
+        )}
         <meshStandardMaterial color={materialColor} />
-        {isSelected && (
+        {isSelected && canOutline && (
           <Outlines thickness={isPrimary ? 1.2 : 0.5} color="#ffffff" />
         )}
       </mesh>
@@ -634,7 +734,7 @@ function GroupTransformControls({
     pivot.position.copy(center);
     pivot.quaternion.identity();
     pivot.scale.set(1, 1, 1);
-  }, [selectedArray, groupMap, pivot]);
+  }, [selectedArray, groupMap, pivot, sceneMap]);
 
   const handleDragStart = useCallback(() => {
     isDragging.current = true;
@@ -674,7 +774,7 @@ function GroupTransformControls({
         });
       }
     }
-  }, [selectedArray, groupMap, pivot]);
+  }, [selectedArray, groupMap, pivot, sceneMap]);
 
   // Temp vectors
   const _delta = useMemo(() => new THREE.Vector3(), []);
@@ -694,7 +794,7 @@ function GroupTransformControls({
   const _localEuler = useMemo(() => new THREE.Euler(), []);
 
   const applyDeltaAndWrite = useCallback(
-    (immediate: boolean) => {
+    () => {
       if (!connected) return;
 
       const objectsMap = sceneMap.get("objects") as
@@ -800,12 +900,12 @@ function GroupTransformControls({
 
   useFrame(() => {
     if (!isDragging.current) return;
-    applyDeltaAndWrite(false);
+    applyDeltaAndWrite();
   });
 
   const handleDragEnd = useCallback(() => {
     isDragging.current = false;
-    applyDeltaAndWrite(true);
+    applyDeltaAndWrite();
 
     // Recenter pivot
     const center = new THREE.Vector3();
@@ -890,9 +990,6 @@ function SceneContent({
 
   // Root objects: no parent or parent doesn't exist
   const rootIds = useMemo(() => {
-    const parentSet = new Set(
-      objects.filter((o) => o.parentId).map((o) => o.parentId!),
-    );
     return objects
       .filter((o) => !o.parentId || !objects.some((p) => p.id === o.parentId))
       .map((o) => o.id);
@@ -982,23 +1079,38 @@ function ConnectionStatus() {
 type SceneCanvasProps = {
   sceneName: string;
   sceneId: string;
-  projectId: string;
 };
 
-export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanvasProps) {
+export default function SceneCanvas({ sceneName, sceneId }: SceneCanvasProps) {
   const levaStore = useCreateStore();
   const { undoManager, connected } = useYjs();
   const { readCamera } = useYjsCamera();
 
   // Selection state
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [primaryId, setPrimaryId] = useState<string | null>(null);
+  const [selectedIdsState, setSelectedIdsState] = useState<Set<string>>(
+    new Set(),
+  );
+  const [primaryIdState, setPrimaryIdState] = useState<string | null>(null);
   const [transformMode, setTransformMode] =
     useState<TransformMode>("translate");
   const [axisConstraint, setAxisConstraint] = useState<AxisConstraint>("none");
 
   // Flat ordering of object IDs for shift-range selection (tree DFS order)
   const objects = useYjsObjects();
+  const objectIdSet = useMemo(
+    () => new Set(objects.map((object) => object.id)),
+    [objects],
+  );
+  const selectedIds = useMemo(() => {
+    const pruned = [...selectedIdsState].filter((id) => objectIdSet.has(id));
+    return pruned.length === selectedIdsState.size
+      ? selectedIdsState
+      : new Set(pruned);
+  }, [objectIdSet, selectedIdsState]);
+  const primaryId = useMemo(() => {
+    if (primaryIdState && objectIdSet.has(primaryIdState)) return primaryIdState;
+    return selectedIds.values().next().value ?? null;
+  }, [objectIdSet, primaryIdState, selectedIds]);
   const flatObjectOrder = useMemo(() => {
     const nodeMap = new Map<
       string,
@@ -1030,57 +1142,47 @@ export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanv
       const { shiftKey, ctrlKey } = modifiers;
 
       if (ctrlKey) {
-        setSelectedIds((prev) => {
+        setSelectedIdsState((prev) => {
           const next = new Set(prev);
           if (next.has(id)) {
             next.delete(id);
-            setPrimaryId((p) => (p === id ? ([...next].pop() ?? null) : p));
+            setPrimaryIdState((p) => (p === id ? ([...next].pop() ?? null) : p));
           } else {
             next.add(id);
-            setPrimaryId(id);
+            setPrimaryIdState(id);
           }
           return next;
         });
       } else if (shiftKey) {
         const anchor = primaryId;
         if (!anchor || anchor === id) {
-          setPrimaryId(id);
-          setSelectedIds(new Set([id]));
+          setPrimaryIdState(id);
+          setSelectedIdsState(new Set([id]));
           return;
         }
         const anchorIdx = flatObjectOrder.indexOf(anchor);
         const targetIdx = flatObjectOrder.indexOf(id);
         if (anchorIdx === -1 || targetIdx === -1) {
-          setPrimaryId(id);
-          setSelectedIds(new Set([id]));
+          setPrimaryIdState(id);
+          setSelectedIdsState(new Set([id]));
           return;
         }
         const start = Math.min(anchorIdx, targetIdx);
         const end = Math.max(anchorIdx, targetIdx);
         const rangeIds = flatObjectOrder.slice(start, end + 1);
-        setSelectedIds(new Set(rangeIds));
+        setSelectedIdsState(new Set(rangeIds));
       } else {
-        setSelectedIds(new Set([id]));
-        setPrimaryId(id);
+        setSelectedIdsState(new Set([id]));
+        setPrimaryIdState(id);
       }
     },
     [primaryId, flatObjectOrder],
   );
 
   const handleDeselectAll = useCallback(() => {
-    setSelectedIds(new Set());
-    setPrimaryId(null);
+    setSelectedIdsState(new Set());
+    setPrimaryIdState(null);
   }, []);
-
-  // Prune selection state when YJS objects are deleted remotely or via sidebar
-  useEffect(() => {
-    const yjsIds = new Set(objects.map((o) => o.id));
-    setSelectedIds((prev) => {
-      const pruned = new Set([...prev].filter((id) => yjsIds.has(id)));
-      return pruned.size === prev.size ? prev : pruned;
-    });
-    setPrimaryId((prev) => (prev && yjsIds.has(prev) ? prev : null));
-  }, [objects]);
 
   const batchDelete = useYjsBatchDelete();
 
@@ -1187,7 +1289,7 @@ export default function SceneCanvas({ sceneName, sceneId, projectId }: SceneCanv
   return (
     <LevaStoreProvider store={levaStore}>
       <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full relative">
-        <SceneTopBar sceneName={sceneName} sceneId={sceneId} projectId={projectId} />
+        <SceneTopBar sceneName={sceneName} sceneId={sceneId} />
 
         {!connected && (
           <div className="absolute inset-0 top-10 z-10 flex items-center justify-center bg-neutral-950/80">

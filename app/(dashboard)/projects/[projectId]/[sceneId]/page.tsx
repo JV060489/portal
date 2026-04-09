@@ -22,7 +22,7 @@ export default async function CanvasPage({
 
   return (
     <YjsProvider sceneId={sceneId}>
-      <SceneCanvas sceneName={scene.name} sceneId={sceneId} projectId={projectId} />
+      <SceneCanvas sceneName={scene.name} sceneId={sceneId} />
     </YjsProvider>
   );
 }

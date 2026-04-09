@@ -3,9 +3,56 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import * as Y from "yjs";
 import type { SceneObjectData, CameraData } from "./types";
-import { createDefaultObject } from "./types";
+import {
+  createDefaultObject,
+  createGeneratedObject,
+  getPrimitiveLocalBounds,
+  type ShapeGeometry,
+} from "./types";
 import { useYjs } from "./provider";
 import { computeWorldMatrix, worldToLocal, decomposeMatrix, writeTransformToMap } from "./transforms";
+
+function readObjectDataFromMap(objMap: Y.Map<unknown>): SceneObjectData {
+  const geometry = (objMap.get("geometry") as string) ?? "box";
+  const geometryKind =
+    (objMap.get("geometryKind") as "primitive" | "generated" | undefined) ??
+    "primitive";
+
+  return {
+    type: (objMap.get("type") as string) ?? "mesh",
+    geometry,
+    geometryKind,
+    sourceKind:
+      (objMap.get("sourceKind") as "openscad" | undefined) ?? undefined,
+    name: (objMap.get("name") as string) ?? "Object",
+    px: (objMap.get("px") as number) ?? 0,
+    py: (objMap.get("py") as number) ?? 0,
+    pz: (objMap.get("pz") as number) ?? 0,
+    rx: (objMap.get("rx") as number) ?? 0,
+    ry: (objMap.get("ry") as number) ?? 0,
+    rz: (objMap.get("rz") as number) ?? 0,
+    sx: (objMap.get("sx") as number) ?? 1,
+    sy: (objMap.get("sy") as number) ?? 1,
+    sz: (objMap.get("sz") as number) ?? 1,
+    materialColor: (objMap.get("materialColor") as string) ?? "#ffffff",
+    parentId: (objMap.get("parentId") as string | undefined) ?? undefined,
+    localBounds:
+      (objMap.get("localBounds") as SceneObjectData["localBounds"]) ??
+      (geometryKind === "primitive"
+        ? getPrimitiveLocalBounds(geometry as ShapeGeometry)
+        : undefined),
+    boundsVersion: (objMap.get("boundsVersion") as number) ?? 1,
+    geometryRevision: (objMap.get("geometryRevision") as number) ?? 1,
+    openscadCode:
+      (objMap.get("openscadCode") as string | undefined) ?? undefined,
+    generatedPrompt:
+      (objMap.get("generatedPrompt") as string | undefined) ?? undefined,
+    compileStatus:
+      (objMap.get("compileStatus") as SceneObjectData["compileStatus"]) ?? "idle",
+    compileError:
+      (objMap.get("compileError") as string | undefined) ?? undefined,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // useYjsObject — bind a single Y.Map object to a Three.js mesh
@@ -100,24 +147,27 @@ export function useYjsObject(objectId: string) {
   const readObject = useCallback((): SceneObjectData | null => {
     const objMap = getObjectMap();
     if (!objMap) return null;
-
-    return {
-      type: (objMap.get("type") as string) ?? "mesh",
-      geometry: (objMap.get("geometry") as string) ?? "box",
-      name: (objMap.get("name") as string) ?? "Object",
-      px: (objMap.get("px") as number) ?? 0,
-      py: (objMap.get("py") as number) ?? 0,
-      pz: (objMap.get("pz") as number) ?? 0,
-      rx: (objMap.get("rx") as number) ?? 0,
-      ry: (objMap.get("ry") as number) ?? 0,
-      rz: (objMap.get("rz") as number) ?? 0,
-      sx: (objMap.get("sx") as number) ?? 1,
-      sy: (objMap.get("sy") as number) ?? 1,
-      sz: (objMap.get("sz") as number) ?? 1,
-      materialColor: (objMap.get("materialColor") as string) ?? "#ffffff",
-      parentId: (objMap.get("parentId") as string | undefined) ?? undefined,
-    };
+    return readObjectDataFromMap(objMap);
   }, [getObjectMap]);
+
+  const writeObjectData = useCallback(
+    (data: Partial<SceneObjectData>) => {
+      if (!connected) return;
+      const objMap = getObjectMap();
+      if (!objMap) return;
+
+      doc.transact(() => {
+        for (const [key, value] of Object.entries(data)) {
+          if (value === undefined) {
+            objMap.delete(key);
+          } else {
+            objMap.set(key, value);
+          }
+        }
+      }, "local-three");
+    },
+    [connected, doc, getObjectMap],
+  );
 
   // Flush pending writes and clear timer on unmount to prevent stale writes
   useEffect(() => {
@@ -143,6 +193,7 @@ export function useYjsObject(objectId: string) {
 
   return {
     writeTransform,
+    writeObjectData,
     observeObject,
     readObject,
     isApplyingRemote,
@@ -267,7 +318,7 @@ export function useYjsObjectIds(): string[] {
 // useYjsObjects — returns { id, name, geometry }[] with live updates
 // ---------------------------------------------------------------------------
 
-export type SceneObjectInfo = { id: string; name: string; geometry: string; parentId?: string };
+export type SceneObjectInfo = SceneObjectData & { id: string };
 
 export function useYjsObjects(): SceneObjectInfo[] {
   const { sceneMap, synced } = useYjs();
@@ -284,12 +335,7 @@ export function useYjsObjects(): SceneObjectInfo[] {
     const readAll = () => {
       const result: SceneObjectInfo[] = [];
       objectsMap.forEach((objMap, id) => {
-        result.push({
-          id,
-          name: (objMap.get("name") as string) ?? "Object",
-          geometry: (objMap.get("geometry") as string) ?? "box",
-          parentId: (objMap.get("parentId") as string | undefined) ?? undefined,
-        });
+        result.push({ id, ...readObjectDataFromMap(objMap) });
       });
       setObjects(result);
     };
@@ -362,6 +408,51 @@ export function useYjsAddObject() {
   );
 }
 
+export function useYjsAddGeneratedObject() {
+  const { doc, sceneMap, connected } = useYjs();
+
+  return useCallback(
+    (
+      name: string,
+      openscadCode: string,
+      generatedPrompt: string,
+      presetId?: string,
+    ): string | null => {
+      if (!connected) return null;
+
+      const objectsMap = sceneMap.get("objects") as
+        | Y.Map<Y.Map<unknown>>
+        | undefined;
+      if (!objectsMap) return null;
+
+      const existingNames = new Set<string>();
+      objectsMap.forEach((objMap) => {
+        const currentName = objMap.get("name") as string | undefined;
+        if (currentName) existingNames.add(currentName);
+      });
+
+      const dedupedName = deduplicateName(name, existingNames);
+      const id = presetId ?? crypto.randomUUID();
+      const data = createGeneratedObject(
+        dedupedName,
+        openscadCode,
+        generatedPrompt,
+      );
+
+      doc.transact(() => {
+        const objMap = new Y.Map<unknown>();
+        for (const [key, value] of Object.entries(data)) {
+          if (value !== undefined) objMap.set(key, value);
+        }
+        objectsMap.set(id, objMap);
+      }, "local-three");
+
+      return id;
+    },
+    [connected, doc, sceneMap],
+  );
+}
+
 // ---------------------------------------------------------------------------
 // useYjsDuplicateObject — duplicate an object with same transforms
 // ---------------------------------------------------------------------------
@@ -389,12 +480,13 @@ export function useYjsDuplicateObject() {
       });
 
       // Build children map for hierarchy duplication
-      const allObjects: SceneObjectInfo[] = [];
+      const allObjects: Array<{
+        id: string;
+        parentId?: string;
+      }> = [];
       objectsMap.forEach((objMap, id) => {
         allObjects.push({
           id,
-          name: (objMap.get("name") as string) ?? "Object",
-          geometry: (objMap.get("geometry") as string) ?? "box",
           parentId: (objMap.get("parentId") as string | undefined) ?? undefined,
         });
       });
@@ -649,7 +741,9 @@ export function useYjsRenameObject() {
 // Hierarchy helpers — pure functions for parent-child relationships
 // ---------------------------------------------------------------------------
 
-export function buildChildrenMap(objects: SceneObjectInfo[]): Map<string, string[]> {
+export function buildChildrenMap(
+  objects: Array<{ id: string; parentId?: string }>,
+): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const obj of objects) {
     if (obj.parentId) {
