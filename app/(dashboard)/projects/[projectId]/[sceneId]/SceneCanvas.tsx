@@ -120,6 +120,55 @@ function toRad(deg: number) {
 type TransformMode = "translate" | "rotate" | "scale";
 type AxisConstraint = "none" | "x" | "y" | "z";
 
+type WorldTransformSnapshot = {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  scale: THREE.Vector3;
+};
+
+function captureWorldTransform(
+  object: THREE.Object3D,
+  snapshot: WorldTransformSnapshot,
+) {
+  object.updateWorldMatrix(true, false);
+  object.matrixWorld.decompose(
+    snapshot.position,
+    snapshot.quaternion,
+    snapshot.scale,
+  );
+}
+
+function writeWorldTransformToGroup(
+  group: THREE.Group,
+  position: THREE.Vector3,
+  quaternion: THREE.Quaternion,
+  scale: THREE.Vector3,
+) {
+  const worldMatrix = new THREE.Matrix4().compose(position, quaternion, scale);
+
+  if (group.parent) {
+    group.parent.updateWorldMatrix(true, false);
+    worldMatrix.premultiply(
+      new THREE.Matrix4().copy(group.parent.matrixWorld).invert(),
+    );
+  }
+
+  worldMatrix.decompose(group.position, group.quaternion, group.scale);
+  group.updateMatrixWorld(true);
+}
+
+function getGroupBoundsCenter(group: THREE.Group, target: THREE.Vector3) {
+  group.updateWorldMatrix(true, true);
+
+  const box = new THREE.Box3().setFromObject(group);
+  if (box.isEmpty()) {
+    group.getWorldPosition(target);
+    return;
+  }
+
+  box.getCenter(target);
+}
+
 // ---------------------------------------------------------------------------
 // ObjectGeometry — renders the correct geometry based on type
 // ---------------------------------------------------------------------------
@@ -519,6 +568,34 @@ function SelectedObjectControls({
     useYjsObject(objectId);
   const { synced } = useYjs();
   const groupRef = useRef(groupObject);
+  const [controlTarget] = useState(() => {
+    const target = new THREE.Object3D();
+    target.name = `TransformControlsCenter:${objectId}`;
+    return target;
+  });
+  const groupDragStart = useRef<WorldTransformSnapshot>({
+    position: new THREE.Vector3(),
+    quaternion: new THREE.Quaternion(),
+    scale: new THREE.Vector3(1, 1, 1),
+  });
+  const controlDragStart = useRef<WorldTransformSnapshot>({
+    position: new THREE.Vector3(),
+    quaternion: new THREE.Quaternion(),
+    scale: new THREE.Vector3(1, 1, 1),
+  });
+  const liveControlTransform = useRef<WorldTransformSnapshot>({
+    position: new THREE.Vector3(),
+    quaternion: new THREE.Quaternion(),
+    scale: new THREE.Vector3(1, 1, 1),
+  });
+  const scratchPosition = useRef(new THREE.Vector3());
+  const scratchQuaternion = useRef(new THREE.Quaternion());
+  const scratchScale = useRef(new THREE.Vector3(1, 1, 1));
+  const scratchOffset = useRef(new THREE.Vector3());
+  const scratchScaleRatio = useRef(new THREE.Vector3(1, 1, 1));
+  const scratchDeltaQuaternion = useRef(new THREE.Quaternion());
+  const scratchInverseQuaternion = useRef(new THREE.Quaternion());
+  const scratchBoundsCenter = useRef(new THREE.Vector3());
 
   useEffect(() => {
     isMounted.current = true;
@@ -530,6 +607,63 @@ function SelectedObjectControls({
   useEffect(() => {
     groupRef.current = groupObject;
   }, [groupObject]);
+
+  const syncControlTargetToGroup = useCallback(() => {
+    const group = groupRef.current;
+    if (!group) return;
+
+    getGroupBoundsCenter(group, scratchBoundsCenter.current);
+    captureWorldTransform(group, liveControlTransform.current);
+
+    controlTarget.position.copy(scratchBoundsCenter.current);
+    controlTarget.quaternion.copy(liveControlTransform.current.quaternion);
+    controlTarget.scale.copy(liveControlTransform.current.scale);
+    controlTarget.updateMatrixWorld(true);
+  }, [controlTarget]);
+
+  const applyControlTargetDeltaToGroup = useCallback(() => {
+    const group = groupRef.current;
+    if (!group) return;
+
+    captureWorldTransform(controlTarget, liveControlTransform.current);
+
+    const scaleRatio = scratchScaleRatio.current.set(
+      controlDragStart.current.scale.x !== 0
+        ? liveControlTransform.current.scale.x / controlDragStart.current.scale.x
+        : 1,
+      controlDragStart.current.scale.y !== 0
+        ? liveControlTransform.current.scale.y / controlDragStart.current.scale.y
+        : 1,
+      controlDragStart.current.scale.z !== 0
+        ? liveControlTransform.current.scale.z / controlDragStart.current.scale.z
+        : 1,
+    );
+
+    scratchInverseQuaternion.current
+      .copy(controlDragStart.current.quaternion)
+      .invert();
+    const deltaQuaternion = scratchDeltaQuaternion.current
+      .copy(liveControlTransform.current.quaternion)
+      .multiply(scratchInverseQuaternion.current);
+
+    const pivotOffset = scratchOffset.current
+      .copy(groupDragStart.current.position)
+      .sub(controlDragStart.current.position)
+      .multiply(scaleRatio)
+      .applyQuaternion(deltaQuaternion);
+    const newPosition = scratchPosition.current
+      .copy(liveControlTransform.current.position)
+      .add(pivotOffset);
+
+    const newQuaternion = scratchQuaternion.current
+      .copy(deltaQuaternion)
+      .multiply(groupDragStart.current.quaternion);
+    const newScale = scratchScale.current
+      .copy(groupDragStart.current.scale)
+      .multiply(scaleRatio);
+
+    writeWorldTransformToGroup(group, newPosition, newQuaternion, newScale);
+  }, [controlTarget]);
 
   const initial = readObject();
   const initPos = initial
@@ -622,13 +756,24 @@ function SelectedObjectControls({
         },
         scale: { x: group.scale.x, y: group.scale.y, z: group.scale.z },
       });
+
+      if (!isDragging.current) {
+        syncControlTargetToGroup();
+      }
     });
-  }, [synced, observeObject, set]);
+  }, [synced, observeObject, set, syncControlTargetToGroup]);
 
   // During drag: sync group → Leva + write local transform to YJS
   useFrame(() => {
     const group = groupRef.current;
-    if (!group || !isDragging.current) return;
+    if (!group) return;
+
+    if (!isDragging.current) {
+      syncControlTargetToGroup();
+      return;
+    }
+
+    applyControlTargetDeltaToGroup();
 
     set({
       position: {
@@ -663,50 +808,61 @@ function SelectedObjectControls({
   const showZ = axisConstraint === "none" || axisConstraint === "z";
 
   return (
-    <TransformControls
-      object={groupObject}
-      mode={transformMode}
-      showX={showX}
-      showY={showY}
-      showZ={showZ}
-      onMouseDown={() => {
-        isDragging.current = true;
-      }}
-      onMouseUp={() => {
-        isDragging.current = false;
-        const group = groupRef.current;
-        if (group) {
-          set({
-            position: {
-              x: group.position.x,
-              y: group.position.y,
-              z: group.position.z,
-            },
-            rotation: {
-              x: toDeg(group.rotation.x),
-              y: toDeg(group.rotation.y),
-              z: toDeg(group.rotation.z),
-            },
-            scale: { x: group.scale.x, y: group.scale.y, z: group.scale.z },
-          });
+    <>
+      <primitive object={controlTarget} />
+      <TransformControls
+        object={controlTarget}
+        mode={transformMode}
+        showX={showX}
+        showY={showY}
+        showZ={showZ}
+        onMouseDown={() => {
+          const group = groupRef.current;
+          if (!group) return;
 
-          writeTransform(
-            {
-              px: group.position.x,
-              py: group.position.y,
-              pz: group.position.z,
-              rx: group.rotation.x,
-              ry: group.rotation.y,
-              rz: group.rotation.z,
-              sx: group.scale.x,
-              sy: group.scale.y,
-              sz: group.scale.z,
-            },
-            true,
-          );
-        }
-      }}
-    />
+          syncControlTargetToGroup();
+          captureWorldTransform(group, groupDragStart.current);
+          captureWorldTransform(controlTarget, controlDragStart.current);
+          isDragging.current = true;
+        }}
+        onMouseUp={() => {
+          applyControlTargetDeltaToGroup();
+          isDragging.current = false;
+          const group = groupRef.current;
+          if (group) {
+            set({
+              position: {
+                x: group.position.x,
+                y: group.position.y,
+                z: group.position.z,
+              },
+              rotation: {
+                x: toDeg(group.rotation.x),
+                y: toDeg(group.rotation.y),
+                z: toDeg(group.rotation.z),
+              },
+              scale: { x: group.scale.x, y: group.scale.y, z: group.scale.z },
+            });
+
+            writeTransform(
+              {
+                px: group.position.x,
+                py: group.position.y,
+                pz: group.position.z,
+                rx: group.rotation.x,
+                ry: group.rotation.y,
+                rz: group.rotation.z,
+                sx: group.scale.x,
+                sy: group.scale.y,
+                sz: group.scale.z,
+              },
+              true,
+            );
+            syncControlTargetToGroup();
+          }
+        }}
+      />
+    </>
   );
 }
 

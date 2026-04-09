@@ -41,6 +41,12 @@ Rules:
 - Keep the footprint centered near the origin in X and Y so preview placement is stable.
 - Avoid wrapping the whole model in a final arbitrary rotate() unless the prompt explicitly requires it.
 - Prefer sensible, compact dimensions and avoid extremely tiny or extremely huge values.
+- For curved, round, cylindrical, spherical, organic, sculptural, vase-like, torus-like, or revolved geometry, make surfaces visually smooth.
+- Set a top-level $fn parameter between 160 and 256 whenever the object has curved surfaces, unless the user explicitly asks for low-poly/faceted geometry.
+- Pass adequate $fn values to cylinder(), sphere(), circle(), rotate_extrude(), and curved helper modules when local control is needed.
+- OpenSCAD has no subdivision-surface modifier. Approximate smooth/subdivision-like forms with high fragment counts, rotate_extrude() from a smooth profile, hull() between overlapping rounded primitives, and careful minkowski()/offset rounding only when complexity stays reasonable.
+- Avoid visibly faceted cylinders/spheres/arcs, coarse polyhedron() meshes, and visibly banded/stepped stacks for objects that should have smooth surfaces.
+- For vases, bottles, cups, lampshades, bowls, and other lathe-like objects, prefer one rotate_extrude() of a many-point smooth profile over stacking separate cylinders/cones. Use 12+ profile points for complex silhouettes and keep slope changes gradual unless the reference has a real edge.
 - Generate manifold, watertight solid geometry only.
 - Avoid infinitely thin walls, open surfaces, coplanar overlapping faces, self-intersections, non-positive dimensions, and boolean operations that merely touch at a face/edge/point.
 - Give shells, rims, plates, text, raised details, engraved details, connectors, and decorative features explicit positive thickness and real overlap with the main body.
@@ -51,6 +57,8 @@ Rules:
 const OPENSCAD_REFERENCE_IMAGE_RULES = `Reference image rules:
 - The attached image is the shape authority. Do not create a generic instance of the named object.
 - Match the visible silhouette first: height-to-width ratio, belly/shoulder height, neck length, lip flare, base taper, foot/base details, handles/spouts/cutouts.
+- If the reference object has ceramic, glass, molded plastic, rounded, organic, or lathe-turned surfaces, generate smooth high-resolution curves that match the silhouette instead of stepped/faceted approximations.
+- Do not approximate a smooth reference image with horizontal bands, stacked frustums, or a visibly segmented body. Use a continuous curved/revolved profile when the source surface is continuous.
 - Model decorative surface geometry only when possible as shallow raised/engraved relief; ignore color-only changes that have no physical boundary.
 - If the user text and image disagree, follow the user's text for task intent and the image for the object's form.`;
 
