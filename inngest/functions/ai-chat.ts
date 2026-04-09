@@ -4,7 +4,12 @@ import { generateText, tool, jsonSchema, stepCountIs } from "ai";
 import type { ModelMessage } from "ai";
 import * as Sentry from "@sentry/nextjs";
 import type { Prisma } from "@prisma/client";
+import {
+  computeWorldBoundsMap,
+  type WorldBoundsSummary,
+} from "@/lib/scene/bounds";
 import { prisma } from "@/lib/prisma";
+import type { LocalBounds } from "@/lib/yjs/types";
 
 const SYSTEM_PROMPT = `You are a 3D scene editor AI. Respond briefly. When asked to modify the scene, call the appropriate tool.
 
@@ -16,7 +21,13 @@ Rules:
 - If the request depends on object relationships or exact placement, inspect the scene first and avoid guessing.
 - Call list_objects first if you need IDs or spatial context.
 - Use object bounds and anchors for placement instead of guessing offsets.
-- If a newly generated object does not have bounds yet, create it first and do not pretend you know its exact final size.
+- Transform position px/py/pz is the object's local origin/pivot, not necessarily the object's visual center.
+- Use worldAnchors.center when centering one object on another.
+- Use worldAnchors.bottomCenter -> target worldAnchors.topCenter when placing one object on top of another.
+- To place an existing object anchor at a target point, move its origin by the same world-space delta from its current anchor to that target.
+- Generated OpenSCAD objects are normalized after compile: their local origin is at the footprint's bottom center, local Y is up, and local Y=0 is the object's base.
+- For requests like "create X on the table", do not wait for the generated object's bounds. Generate it, then place it by setting px/pz to the target topCenter X/Z and py to the target topCenter Y.
+- If exact scale, clearance, stacking on top of the generated object, or alignment to the generated object's side depends on its final bounds, create it first and explain that a follow-up is needed after bounds appear.
 - After mutations, confirm in one short sentence.`;
 
 const OPENSCAD_CODE_PROMPT = `You generate only valid OpenSCAD for a single 3D object.
@@ -50,16 +61,48 @@ type SceneObject = {
   sx?: number;
   sy?: number;
   sz?: number;
-  localBounds?: unknown;
-  worldBounds?: unknown;
-  worldAnchors?: unknown;
+  localBounds?: LocalBounds;
+  worldBounds?: LocalBounds;
+  worldAnchors?: WorldBoundsSummary["anchors"];
   generatedPrompt?: string;
+};
+
+const GENERATED_OBJECT_BOUNDS_ESTIMATE: LocalBounds = {
+  min: [-0.5, 0, -0.5],
+  max: [0.5, 1, 0.5],
+  size: [1, 1, 1],
+  center: [0, 0.5, 0],
 };
 
 type InputMessage = {
   role: "user" | "assistant";
   content: string;
 };
+
+function refreshSceneBoundsContext(liveScene: SceneObject[]) {
+  const summaries = computeWorldBoundsMap(
+    liveScene.map((obj) => ({
+      id: obj.id,
+      parentId: obj.parentId,
+      px: obj.px ?? 0,
+      py: obj.py ?? 0,
+      pz: obj.pz ?? 0,
+      rx: obj.rx ?? 0,
+      ry: obj.ry ?? 0,
+      rz: obj.rz ?? 0,
+      sx: obj.sx ?? 1,
+      sy: obj.sy ?? 1,
+      sz: obj.sz ?? 1,
+      localBounds: obj.localBounds,
+    })),
+  );
+
+  for (const obj of liveScene) {
+    const summary = summaries.get(obj.id);
+    obj.worldBounds = summary?.bounds;
+    obj.worldAnchors = summary?.anchors;
+  }
+}
 
 async function generateOpenScadCode(
   model: string,
@@ -111,6 +154,7 @@ export const aiChatFunction = inngest.createFunction(
 
       // Mutable scene state so list_objects reflects additions/deletions mid-conversation
       const liveScene: SceneObject[] = sceneContext.map((o) => ({ ...o }));
+      refreshSceneBoundsContext(liveScene);
 
       const aiResult = await generateText({
         model: provider(model),
@@ -162,8 +206,19 @@ export const aiChatFunction = inngest.createFunction(
                 geometryKind: "generated",
                 sourceKind: "openscad",
                 name: resolvedName,
+                px: 0,
+                py: 0,
+                pz: 0,
+                rx: 0,
+                ry: 0,
+                rz: 0,
+                sx: 1,
+                sy: 1,
+                sz: 1,
+                localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
                 generatedPrompt: prompt,
               });
+              refreshSceneBoundsContext(liveScene);
               return {
                 ok: true,
                 id,
@@ -187,6 +242,7 @@ export const aiChatFunction = inngest.createFunction(
               const { objectId } = input as { objectId: string };
               const idx = liveScene.findIndex((o) => o.id === objectId);
               if (idx !== -1) liveScene.splice(idx, 1);
+              refreshSceneBoundsContext(liveScene);
               return { ok: true, deleted: objectId };
             },
           }),
@@ -234,6 +290,7 @@ export const aiChatFunction = inngest.createFunction(
               const target = liveScene.find((obj) => obj.id === objectId);
               if (target) {
                 Object.assign(target, payload);
+                refreshSceneBoundsContext(liveScene);
               }
               return { ok: true, ...payload };
             },
@@ -273,6 +330,7 @@ export const aiChatFunction = inngest.createFunction(
                   id: newId,
                   name: `${original.name} copy`,
                 });
+                refreshSceneBoundsContext(liveScene);
                 return { ok: true, originalId: objectId, newId };
               }
               return { ok: false, error: "Object not found" };
