@@ -1593,7 +1593,14 @@ export default function SceneCanvas({ sceneName, sceneId }: SceneCanvasProps) {
             className={cn("h-full shrink-0 overflow-hidden", chatCollapsed ? "w-12" : "transition-none")}
             style={chatCollapsed ? undefined : { width: chatWidth }}
           >
-            <AiChatBox collapsed={chatCollapsed} onCollapse={setChatCollapsed} />
+            <AiChatBox
+              key={sceneId}
+              sceneId={sceneId}
+              collapsed={chatCollapsed}
+              onCollapse={setChatCollapsed}
+              selectedIds={selectedIds}
+              primaryId={primaryId}
+            />
           </div>
 
         </div>

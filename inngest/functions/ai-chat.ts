@@ -65,6 +65,15 @@ const OPENSCAD_REFERENCE_IMAGE_RULES = `Reference image rules:
 const SCENE_REFERENCE_IMAGE_RULES = `The current user message includes a reference image.
 Use it as visual context for generation requests. When you call generate_openscad_object for the referenced object, keep the prompt focused on the user's intent and explicitly mention that the attached reference image must be used for the object's visible form. Do not replace the reference with a generic object.`;
 
+const SELECTION_RULES = `Selection rules:
+- The user may have selected scene objects. Selection is focus context, not a hard lock.
+- The first selectedObjectId is the primary selected object.
+- If objects are selected and the user says "this", "it", "them", "selected", or asks for an ambiguous edit, target the selected objects.
+- For transform, rename, delete, duplicate, and color/material edits, use the existing scene edit tools on selected object IDs.
+- For shape/form/detail edits to a selected object, call edit_openscad_object instead of generate_openscad_object.
+- For multi-selection shape edits, edit the primary selected object unless the user clearly identifies multiple selected targets. Ask a brief question if the target is still ambiguous.
+- If the user clearly asks to create/add/generate a new object, call generate_openscad_object. You may still use the selection for placement/reference.`;
+
 type SceneObject = {
   id: string;
   name: string;
@@ -84,6 +93,8 @@ type SceneObject = {
   localBounds?: LocalBounds;
   worldBounds?: LocalBounds;
   worldAnchors?: WorldBoundsSummary["anchors"];
+  materialColor?: string;
+  openscadCode?: string;
   generatedPrompt?: string;
 };
 
@@ -137,6 +148,46 @@ function getReferenceImageBytes(referenceImage: ReferenceImage): Uint8Array {
   }
 
   return new Uint8Array(Buffer.from(base64Payload, "base64"));
+}
+
+function buildSelectedObjects(
+  liveScene: SceneObject[],
+  selectedObjectIds: string[],
+) {
+  const sceneById = new Map(liveScene.map((object) => [object.id, object]));
+  return selectedObjectIds
+    .map((id) => sceneById.get(id))
+    .filter((object): object is SceneObject => Boolean(object));
+}
+
+function buildSelectionContext(
+  selectedObjectIds: string[],
+  selectedObjects: SceneObject[],
+): string {
+  if (selectedObjects.length === 0) {
+    return "Selection context: no scene objects are currently selected.";
+  }
+
+  return `Selection context:
+- selectedObjectIds, primary first: ${JSON.stringify(selectedObjectIds)}
+- selectedObjects: ${JSON.stringify(
+    selectedObjects.map((object) => ({
+      id: object.id,
+      name: object.name,
+      geometry: object.geometry,
+      geometryKind: object.geometryKind,
+      sourceKind: object.sourceKind,
+      materialColor: object.materialColor,
+      px: object.px,
+      py: object.py,
+      pz: object.pz,
+      sx: object.sx,
+      sy: object.sy,
+      sz: object.sz,
+      worldAnchors: object.worldAnchors,
+      generatedPrompt: object.generatedPrompt,
+    })),
+  )}`;
 }
 
 async function generateOpenScadCode(
@@ -200,6 +251,49 @@ function buildOpenScadUserPrompt(
 Use the attached reference image as the concrete visual specification for the object's visible form. Match that image; do not create a generic version of the requested noun.`;
 }
 
+function buildOpenScadEditPrompt({
+  target,
+  editPrompt,
+  referenceImage,
+}: {
+  target: SceneObject;
+  editPrompt: string;
+  referenceImage?: ReferenceImage;
+}): string {
+  const currentCode = target.openscadCode?.trim();
+  const existingModelContext = currentCode
+    ? `Current OpenSCAD code:
+${currentCode}`
+    : `The selected object is currently a ${target.geometry} primitive. Replace it with an OpenSCAD object that satisfies the requested edit while preserving the user's intent.`;
+
+  return buildOpenScadUserPrompt(
+    `Edit the existing selected scene object in place.
+
+Target object:
+${JSON.stringify(
+  {
+    id: target.id,
+    name: target.name,
+    geometry: target.geometry,
+    geometryKind: target.geometryKind,
+    generatedPrompt: target.generatedPrompt,
+    localBounds: target.localBounds,
+    worldBounds: target.worldBounds,
+  },
+  null,
+  2,
+)}
+
+Requested edit:
+${editPrompt}
+
+${existingModelContext}
+
+Return a complete replacement OpenSCAD model for this same object. Keep the object upright, standing on z=0, and centered around the footprint origin so the current scene transform still places it correctly.`,
+    referenceImage,
+  );
+}
+
 function attachReferenceImageToLatestUserMessage(
   messages: InputMessage[],
   referenceImage?: ReferenceImage,
@@ -258,14 +352,22 @@ export const aiChatFunction = inngest.createFunction(
     },
   },
   async ({ event, step, logger }) => {
-    const { jobId, messages, model, sceneContext, userId, referenceImage } =
-      event.data as {
+    const {
+      jobId,
+      messages,
+      model,
+      sceneContext,
+      userId,
+      referenceImage,
+      selectedObjectIds = [],
+    } = event.data as {
       jobId: string;
       messages: InputMessage[];
       model: string;
       sceneContext: SceneObject[];
       userId: string;
       referenceImage?: ReferenceImage;
+      selectedObjectIds?: string[];
     };
 
     const result = await step.run("generate", async () => {
@@ -278,14 +380,24 @@ export const aiChatFunction = inngest.createFunction(
       // Mutable scene state so list_objects reflects additions/deletions mid-conversation
       const liveScene: SceneObject[] = sceneContext.map((o) => ({ ...o }));
       refreshSceneBoundsContext(liveScene);
+      const selectedObjects = buildSelectedObjects(
+        liveScene,
+        selectedObjectIds,
+      );
+      const selectionContext = buildSelectionContext(
+        selectedObjectIds,
+        selectedObjects,
+      );
 
       const aiResult = await generateText({
         model: provider(model),
-        system: referenceImage
-          ? `${SYSTEM_PROMPT}
+        system: `${SYSTEM_PROMPT}
 
-${SCENE_REFERENCE_IMAGE_RULES}`
-          : SYSTEM_PROMPT,
+${SELECTION_RULES}
+
+${selectionContext}${referenceImage ? `
+
+${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
         messages: modelMessages,
         stopWhen: stepCountIs(10),
         experimental_telemetry: {
@@ -302,7 +414,23 @@ ${SCENE_REFERENCE_IMAGE_RULES}`
               properties: {},
               additionalProperties: false,
             }),
-            execute: async () => ({ objects: liveScene }),
+            execute: async () => ({
+              selectedObjectIds,
+              objects: liveScene,
+            }),
+          }),
+          list_selected_objects: tool({
+            description:
+              "List the currently selected scene objects. The first selectedObjectId is the primary selection.",
+            inputSchema: jsonSchema({
+              type: "object" as const,
+              properties: {},
+              additionalProperties: false,
+            }),
+            execute: async () => ({
+              selectedObjectIds,
+              objects: buildSelectedObjects(liveScene, selectedObjectIds),
+            }),
           }),
           generate_openscad_object: tool({
             description:
@@ -352,12 +480,83 @@ ${SCENE_REFERENCE_IMAGE_RULES}`
                 sy: 1,
                 sz: 1,
                 localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
+                openscadCode,
                 generatedPrompt,
               });
               refreshSceneBoundsContext(liveScene);
               return {
                 ok: true,
                 id,
+                name: resolvedName,
+                geometry: "generated",
+                geometryKind: "generated",
+                sourceKind: "openscad",
+                generatedPrompt,
+                openscadCode,
+              };
+            },
+          }),
+          edit_openscad_object: tool({
+            description:
+              "Replace an existing scene object's shape with new OpenSCAD code. Use this for shape/form/detail edits to a selected or named object. Keeps the same object ID and scene transform.",
+            inputSchema: jsonSchema({
+              type: "object" as const,
+              properties: {
+                objectId: { type: "string" },
+                editPrompt: {
+                  type: "string",
+                  description:
+                    "The requested visual/geometry edit. Include all important retained features.",
+                },
+                name: {
+                  type: "string",
+                  description: "Optional new object name.",
+                },
+              },
+              required: ["objectId", "editPrompt"],
+            }),
+            execute: async (input) => {
+              const { objectId, editPrompt, name } = input as {
+                objectId: string;
+                editPrompt: string;
+                name?: string;
+              };
+              const target = liveScene.find((object) => object.id === objectId);
+              if (!target) {
+                return { ok: false, error: "Object not found", objectId };
+              }
+
+              const codePrompt = buildOpenScadEditPrompt({
+                target,
+                editPrompt,
+                referenceImage,
+              });
+              const openscadCode = await generateOpenScadCode(
+                model,
+                provider,
+                codePrompt,
+                referenceImage,
+              );
+              const generatedPrompt = buildGeneratedPromptForStorage(
+                `Edit ${target.name}: ${editPrompt}`,
+                referenceImage,
+              );
+              const resolvedName = name ?? target.name;
+
+              Object.assign(target, {
+                name: resolvedName,
+                geometry: "generated",
+                geometryKind: "generated" as const,
+                sourceKind: "openscad" as const,
+                openscadCode,
+                generatedPrompt,
+                localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
+              });
+              refreshSceneBoundsContext(liveScene);
+
+              return {
+                ok: true,
+                objectId,
                 name: resolvedName,
                 geometry: "generated",
                 geometryKind: "generated",
@@ -499,12 +698,20 @@ ${SCENE_REFERENCE_IMAGE_RULES}`
       const writeCalls: { toolName: string; args: unknown }[] = [];
       for (const s of aiResult.steps) {
         for (const tc of s.toolCalls) {
-          if (tc.toolName === "list_objects") continue;
+          if (
+            tc.toolName === "list_objects" ||
+            tc.toolName === "list_selected_objects"
+          ) {
+            continue;
+          }
           const input = (tc as unknown as { input: unknown }).input as Record<
             string,
             unknown
           >;
-          if (tc.toolName === "generate_openscad_object") {
+          if (
+            tc.toolName === "generate_openscad_object" ||
+            tc.toolName === "edit_openscad_object"
+          ) {
             const result = s.toolResults?.find(
               (tr) => tr.toolCallId === tc.toolCallId,
             );

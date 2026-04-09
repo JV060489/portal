@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import * as Y from "yjs";
 import * as Sentry from "@sentry/nextjs";
 import { Bot, ImagePlus, SendHorizontal, X } from "lucide-react";
@@ -116,11 +116,17 @@ async function resizeReferenceImage(file: File): Promise<ReferenceImage> {
 // ---------------------------------------------------------------------------
 
 export function AiChatBox({
+  sceneId,
   collapsed,
   onCollapse,
+  selectedIds,
+  primaryId,
 }: {
+  sceneId: string;
   collapsed: boolean;
   onCollapse: (v: boolean) => void;
+  selectedIds: Set<string>;
+  primaryId: string | null;
 }) {
   const { doc, sceneMap, connected } = useYjs();
   const objects = useYjsObjects();
@@ -147,6 +153,20 @@ export function AiChatBox({
   const activePollRequestRef = useRef(false);
   const completedJobIdsRef = useRef<Set<string>>(new Set());
 
+  const selectedObjectIds = useMemo(() => {
+    const ids = [...selectedIds];
+    if (!primaryId || !selectedIds.has(primaryId)) return ids;
+
+    return [primaryId, ...ids.filter((id) => id !== primaryId)];
+  }, [primaryId, selectedIds]);
+
+  const selectedObjects = useMemo(() => {
+    const objectMap = new Map(objects.map((object) => [object.id, object]));
+    return selectedObjectIds
+      .map((id) => objectMap.get(id))
+      .filter((object) => object !== undefined);
+  }, [objects, selectedObjectIds]);
+
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -163,6 +183,17 @@ export function AiChatBox({
   useEffect(() => {
     resizeTextarea();
   }, [input, resizeTextarea]);
+
+  useEffect(() => {
+    setMessages([]);
+    setInput("");
+    setReferenceImage(null);
+    setJobId(null);
+    setIsLoading(false);
+    setError(null);
+    completedJobIdsRef.current.clear();
+    activePollRequestRef.current = false;
+  }, [sceneId]);
 
   // ---------------------------------------------------------------------------
   // Execute a tool call against YJS
@@ -190,6 +221,43 @@ export function AiChatBox({
           const generatedPrompt =
             (args.generatedPrompt as string | undefined) ?? name;
           addGeneratedObject(name, openscadCode, generatedPrompt, presetId);
+          break;
+        }
+        case "edit_openscad_object": {
+          if (!connected) break;
+          const objectsMap = sceneMap.get("objects") as
+            | Y.Map<Y.Map<unknown>>
+            | undefined;
+          const objMap = objectsMap?.get(args.objectId as string);
+          const openscadCode = args.openscadCode as string | undefined;
+          if (!objMap || !openscadCode) break;
+
+          const currentGeometryRevision =
+            (objMap.get("geometryRevision") as number | undefined) ?? 1;
+          const currentBoundsVersion =
+            (objMap.get("boundsVersion") as number | undefined) ?? 1;
+          const generatedPrompt =
+            (args.generatedPrompt as string | undefined) ??
+            (args.editPrompt as string | undefined) ??
+            (objMap.get("generatedPrompt") as string | undefined) ??
+            (objMap.get("name") as string | undefined) ??
+            "Edited object";
+
+          doc.transact(() => {
+            objMap.set("geometry", "generated");
+            objMap.set("geometryKind", "generated");
+            objMap.set("sourceKind", "openscad");
+            objMap.set("openscadCode", openscadCode);
+            objMap.set("generatedPrompt", generatedPrompt);
+            objMap.set("geometryRevision", currentGeometryRevision + 1);
+            objMap.set("boundsVersion", currentBoundsVersion + 1);
+            objMap.set("compileStatus", "idle");
+            objMap.delete("compileError");
+            objMap.delete("localBounds");
+            if (typeof args.name === "string" && args.name.trim()) {
+              objMap.set("name", args.name.trim());
+            }
+          }, "local-ai");
           break;
         }
         case "delete_object": {
@@ -360,6 +428,7 @@ export function AiChatBox({
           ...(submittedReferenceImage && {
             referenceImage: submittedReferenceImage,
           }),
+          selectedObjectIds,
           sceneContext: objects.map((o) => {
             const worldSummary = worldBoundsMap.get(o.id);
             return {
@@ -381,6 +450,8 @@ export function AiChatBox({
               localBounds: o.localBounds,
               worldBounds: worldSummary?.bounds,
               worldAnchors: worldSummary?.anchors,
+              materialColor: o.materialColor,
+              openscadCode: o.openscadCode,
               generatedPrompt: o.generatedPrompt,
             };
           }),
@@ -549,6 +620,41 @@ export function AiChatBox({
 
           {/* Input row */}
           <div className="px-3 pb-3 pt-2 border-t border-border shrink-0">
+            {selectedObjects.length > 0 && (
+              <div className="mb-2 rounded-lg border border-white/10 bg-neutral-900 px-2 py-1.5">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+                    Selected
+                  </span>
+                  {selectedObjects.length > 1 && (
+                    <span className="text-[10px] text-neutral-500">
+                      {selectedObjects.length} objects
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {selectedObjects.slice(0, 4).map((object) => (
+                    <span
+                      key={object.id}
+                      title={object.id === primaryId ? "Primary selection" : undefined}
+                      className={`max-w-full truncate rounded-md px-2 py-0.5 text-[11px] ${
+                        object.id === primaryId
+                          ? "bg-neutral-700 text-neutral-100"
+                          : "bg-neutral-800 text-neutral-300"
+                      }`}
+                    >
+                      {object.name}
+                    </span>
+                  ))}
+                  {selectedObjects.length > 4 && (
+                    <span className="rounded-md bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-400">
+                      +{selectedObjects.length - 4} more
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {referenceImage && (
               <div className="mb-2 flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900 p-2">
                 <div

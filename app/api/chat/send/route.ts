@@ -14,6 +14,25 @@ type ReferenceImage = {
   name?: string;
 };
 
+function parseSelectedObjectIds(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+
+  const ids: string[] = [];
+  const seen = new Set<string>();
+
+  for (const item of input) {
+    if (typeof item !== "string") continue;
+    const id = item.trim();
+    if (!id || seen.has(id)) continue;
+
+    seen.add(id);
+    ids.push(id);
+    if (ids.length >= 50) break;
+  }
+
+  return ids;
+}
+
 function parseReferenceImage(input: unknown): ReferenceImage | undefined {
   if (input === undefined || input === null) return undefined;
   if (typeof input !== "object") {
@@ -62,8 +81,14 @@ export async function POST(req: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { messages, model, sceneContext, referenceImage: rawReferenceImage } =
-    await req.json();
+  const {
+    messages,
+    model,
+    sceneContext,
+    referenceImage: rawReferenceImage,
+    selectedObjectIds: rawSelectedObjectIds,
+  } = await req.json();
+  const selectedObjectIds = parseSelectedObjectIds(rawSelectedObjectIds);
 
   let referenceImage: ReferenceImage | undefined;
   try {
@@ -104,6 +129,7 @@ export async function POST(req: Request) {
       model: selectedModel,
       sceneContext,
       userId,
+      selectedObjectIds,
       ...(referenceImage && { referenceImage }),
     },
   });
