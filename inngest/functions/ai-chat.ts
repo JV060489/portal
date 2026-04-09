@@ -1,6 +1,7 @@
 import { inngest } from "../client";
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, tool, jsonSchema, stepCountIs } from "ai";
+import type { ModelMessage } from "ai";
 import * as Sentry from "@sentry/nextjs";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -56,7 +57,7 @@ type SceneObject = {
 };
 
 type InputMessage = {
-  role: string;
+  role: "user" | "assistant";
   content: string;
 };
 
@@ -106,6 +107,7 @@ export const aiChatFunction = inngest.createFunction(
 
     const result = await step.run("generate", async () => {
       const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const modelMessages: ModelMessage[] = messages;
 
       // Mutable scene state so list_objects reflects additions/deletions mid-conversation
       const liveScene: SceneObject[] = sceneContext.map((o) => ({ ...o }));
@@ -113,7 +115,7 @@ export const aiChatFunction = inngest.createFunction(
       const aiResult = await generateText({
         model: provider(model),
         system: SYSTEM_PROMPT,
-        messages,
+        messages: modelMessages,
         stopWhen: stepCountIs(10),
         experimental_telemetry: {
           isEnabled: true,

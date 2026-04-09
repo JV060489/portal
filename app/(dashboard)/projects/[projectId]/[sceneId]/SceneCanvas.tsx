@@ -146,6 +146,40 @@ function ObjectGeometry({ geometry }: { geometry: string }) {
   }
 }
 
+function SelectedObjectOutline({
+  meshRef,
+  isPrimary,
+}: {
+  meshRef: React.RefObject<THREE.Mesh | null>;
+  isPrimary: boolean;
+}) {
+  const [geometryVersion, setGeometryVersion] = useState("");
+  const geometryVersionRef = useRef("");
+
+  useFrame(() => {
+    const nextVersion = meshRef.current?.geometry?.uuid ?? "";
+    if (geometryVersionRef.current === nextVersion) return;
+
+    geometryVersionRef.current = nextVersion;
+    setGeometryVersion(nextVersion);
+  });
+
+  if (!geometryVersion) return null;
+
+  return (
+    <Outlines
+      key={geometryVersion}
+      angle={0}
+      color={isPrimary ? "#ffffff" : "#bfdbfe"}
+      polygonOffset
+      polygonOffsetFactor={1}
+      renderOrder={1}
+      thickness={isPrimary ? 1.5 : 1}
+      toneMapped={false}
+    />
+  );
+}
+
 function GeneratedMeshContent({
   objectId,
   objectData,
@@ -331,6 +365,7 @@ function SceneObject({
   onGroupReadyMap: (id: string, group: THREE.Group | null) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const meshRef = useRef<THREE.Mesh>(null);
   const { observeObject, readObject } = useYjsObject(objectId);
   const { synced } = useYjs();
 
@@ -414,15 +449,11 @@ function SceneObject({
     });
   }, [synced, observeObject, readObject]);
 
-  const canOutline =
-    !objectData ||
-    objectData.geometryKind !== "generated" ||
-    objectData.compileStatus === "ready";
-
   return (
     <group ref={setGroupRef}>
       {/* The actual mesh — at identity transform within the group */}
       <mesh
+        ref={meshRef}
         onClick={(e) => {
           e.stopPropagation();
           onSelect(objectId, {
@@ -437,8 +468,8 @@ function SceneObject({
           <ObjectGeometry geometry="box" />
         )}
         <meshStandardMaterial color={materialColor} />
-        {isSelected && canOutline && (
-          <Outlines thickness={isPrimary ? 1.2 : 0.5} color="#ffffff" />
+        {isSelected && (
+          <SelectedObjectOutline meshRef={meshRef} isPrimary={isPrimary} />
         )}
       </mesh>
 
