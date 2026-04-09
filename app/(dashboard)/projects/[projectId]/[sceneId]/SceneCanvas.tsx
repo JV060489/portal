@@ -1240,15 +1240,12 @@ function SceneContent({
 function ConnectionStatus() {
   const { connected, synced } = useYjs();
 
-  let color = "bg-red-500";
-  let label = "Disconnected";
+  let color = "bg-yellow-500";
+  let label = "Connecting";
 
   if (connected && synced) {
     color = "bg-green-500";
     label = "Synced";
-  } else if (connected) {
-    color = "bg-yellow-500";
-    label = "Connecting...";
   }
 
   return (
@@ -1270,7 +1267,7 @@ type SceneCanvasProps = {
 
 export default function SceneCanvas({ sceneName, sceneId }: SceneCanvasProps) {
   const levaStore = useCreateStore();
-  const { undoManager, connected } = useYjs();
+  const { undoManager } = useYjs();
   const { readCamera } = useYjsCamera();
 
   // Selection state
@@ -1477,14 +1474,6 @@ export default function SceneCanvas({ sceneName, sceneId }: SceneCanvasProps) {
     <LevaStoreProvider store={levaStore}>
       <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full relative">
         <SceneTopBar sceneName={sceneName} sceneId={sceneId} />
-
-        {!connected && (
-          <div className="absolute inset-0 top-10 z-10 flex items-center justify-center bg-neutral-950/80">
-            <p className="text-neutral-400 text-sm">
-              Connection lost. Changes are disabled until reconnection.
-            </p>
-          </div>
-        )}
 
         <div className="flex-1 min-h-0 flex flex-row overflow-hidden">
 
