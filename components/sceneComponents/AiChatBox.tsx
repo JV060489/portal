@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as Y from "yjs";
 import * as Sentry from "@sentry/nextjs";
-import { Bot, SendHorizontal } from "lucide-react";
+import { Bot, ImagePlus, SendHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useYjs } from "@/lib/yjs/provider";
 import {
@@ -24,11 +24,19 @@ import { computeWorldBoundsMap } from "@/lib/scene/bounds";
 type Message = {
   role: "user" | "assistant";
   content: string;
+  referenceImageName?: string;
+  referenceImagePreview?: string;
 };
 
 type ToolCall = {
   toolName: string;
   args: Record<string, unknown>;
+};
+
+type ReferenceImage = {
+  dataUrl: string;
+  mediaType: "image/png" | "image/jpeg" | "image/webp";
+  name?: string;
 };
 
 const MODELS = [
@@ -37,6 +45,71 @@ const MODELS = [
   { id: "gpt-5.4-nano", label: "GPT-5.4 Nano" },
   { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
 ] as const;
+
+const IMAGE_ONLY_PROMPT =
+  "Create an OpenSCAD object from the attached reference image.";
+
+const REFERENCE_IMAGE_MAX_EDGE = 1024;
+const REFERENCE_IMAGE_MAX_DATA_URL_BYTES = 3 * 1024 * 1024;
+const REFERENCE_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+
+function isReferenceImageType(
+  mediaType: string,
+): mediaType is ReferenceImage["mediaType"] {
+  return REFERENCE_IMAGE_TYPES.includes(mediaType);
+}
+
+function readImageFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Failed to read image."));
+    };
+    reader.onerror = () => reject(new Error("Failed to read image."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load image."));
+    image.src = dataUrl;
+  });
+}
+
+async function resizeReferenceImage(file: File): Promise<ReferenceImage> {
+  if (!isReferenceImageType(file.type)) {
+    throw new Error("Reference image must be a PNG, JPEG, or WebP.");
+  }
+
+  const originalDataUrl = await readImageFileAsDataUrl(file);
+  const image = await loadImage(originalDataUrl);
+  const scale = Math.min(
+    1,
+    REFERENCE_IMAGE_MAX_EDGE / Math.max(image.naturalWidth, image.naturalHeight),
+  );
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Failed to prepare image.");
+
+  context.drawImage(image, 0, 0, width, height);
+
+  const outputType = file.type === "image/png" ? "image/png" : file.type;
+  const dataUrl = canvas.toDataURL(outputType, 0.86);
+  if (dataUrl.length > REFERENCE_IMAGE_MAX_DATA_URL_BYTES) {
+    throw new Error("Reference image is too large. Try a smaller image.");
+  }
+
+  return { dataUrl, mediaType: outputType, name: file.name };
+}
 
 // ---------------------------------------------------------------------------
 // AiChatBox
@@ -60,12 +133,17 @@ export function AiChatBox({
   const [selectedModel, setSelectedModel] = useState("gpt-5.4");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [referenceImage, setReferenceImage] = useState<ReferenceImage | null>(
+    null,
+  );
+  const [isPreparingImage, setIsPreparingImage] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const activePollRequestRef = useRef(false);
   const completedJobIdsRef = useRef<Set<string>>(new Set());
 
@@ -246,15 +324,25 @@ export function AiChatBox({
 
   async function handleSubmit() {
     const text = input.trim();
-    if (!text || isLoading) return;
+    const submittedReferenceImage = referenceImage;
+    if ((!text && !submittedReferenceImage) || isLoading || isPreparingImage)
+      return;
+
+    const userText = text || IMAGE_ONLY_PROMPT;
 
     setInput("");
+    setReferenceImage(null);
     setError(null);
     setIsLoading(true);
 
     const newMessages: Message[] = [
       ...messages,
-      { role: "user", content: text },
+      {
+        role: "user",
+        content: userText,
+        referenceImageName: submittedReferenceImage?.name ?? undefined,
+        referenceImagePreview: submittedReferenceImage?.dataUrl ?? undefined,
+      },
     ];
     setMessages(newMessages);
 
@@ -264,8 +352,14 @@ export function AiChatBox({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: newMessages,
+          messages: newMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
           model: selectedModel,
+          ...(submittedReferenceImage && {
+            referenceImage: submittedReferenceImage,
+          }),
           sceneContext: objects.map((o) => {
             const worldSummary = worldBoundsMap.get(o.id);
             return {
@@ -304,11 +398,34 @@ export function AiChatBox({
       setJobId(newJobId);
     } catch (err) {
       setMessages(messages);
+      setReferenceImage(submittedReferenceImage);
       const message =
         err instanceof Error ? err.message : "Failed to send message";
       setError(message);
       setIsLoading(false);
       Sentry.captureException(err);
+    }
+  }
+
+  async function handleReferenceImageChange(
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setIsPreparingImage(true);
+    setError(null);
+    try {
+      const resizedImage = await resizeReferenceImage(file);
+      setReferenceImage(resizedImage);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to prepare image";
+      setError(message);
+      Sentry.captureException(err);
+    } finally {
+      setIsPreparingImage(false);
     }
   }
 
@@ -399,6 +516,24 @@ export function AiChatBox({
                   }`}
                 >
                   {msg.content}
+                  {msg.referenceImagePreview && (
+                    <div
+                      aria-label="Attached reference image"
+                      role="img"
+                      className="mt-2 aspect-[4/3] w-full rounded-md bg-neutral-800 bg-cover bg-center"
+                      style={{
+                        backgroundImage: `url(${msg.referenceImagePreview})`,
+                      }}
+                    />
+                  )}
+                  {(msg.referenceImageName || msg.referenceImagePreview) && (
+                    <div className="mt-1 flex items-center gap-1 border-t border-white/10 pt-1 text-[10px] text-neutral-400">
+                      <ImagePlus className="h-3 w-3 shrink-0" />
+                      <span className="truncate">
+                        {msg.referenceImageName ?? "Reference image"}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -413,29 +548,80 @@ export function AiChatBox({
           </div>
 
           {/* Input row */}
-          <div className="flex items-end gap-2 px-3 pb-3 pt-2 border-t border-border shrink-0">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={isLoading}
-              rows={1}
-              placeholder={
-                isLoading
-                  ? "AI is responding..."
-                  : "Ask AI to generate or edit the scene..."
-              }
-              className="flex-1 resize-none overflow-hidden bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
-              style={{ minHeight: "2.25rem", maxHeight: "10rem" }}
-            />
-            <button
-              onClick={handleSubmit}
-              disabled={isLoading || !input.trim()}
-              className="shrink-0 p-2 rounded-lg bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-neutral-200"
-            >
-              <SendHorizontal className="w-4 h-4" />
-            </button>
+          <div className="px-3 pb-3 pt-2 border-t border-border shrink-0">
+            {referenceImage && (
+              <div className="mb-2 flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900 p-2">
+                <div
+                  aria-label="Reference image"
+                  role="img"
+                  className="h-10 w-10 shrink-0 rounded-md bg-neutral-800 bg-cover bg-center"
+                  style={{ backgroundImage: `url(${referenceImage.dataUrl})` }}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs text-neutral-200">
+                    {referenceImage.name ?? "Reference image"}
+                  </p>
+                  <p className="text-[10px] text-neutral-500">
+                    OpenSCAD reference
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReferenceImage(null)}
+                  disabled={isLoading}
+                  className="rounded-md p-1 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+
+            <div className="flex items-end gap-2">
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={handleReferenceImageChange}
+                disabled={isLoading || isPreparingImage}
+              />
+              <button
+                type="button"
+                onClick={() => imageInputRef.current?.click()}
+                disabled={isLoading || isPreparingImage}
+                className="shrink-0 p-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-neutral-300"
+              >
+                <ImagePlus className="w-4 h-4" />
+              </button>
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                disabled={isLoading}
+                rows={1}
+                placeholder={
+                  isLoading
+                    ? "AI is responding..."
+                    : referenceImage
+                      ? "Describe what to model from the image..."
+                      : "Ask AI to generate or edit the scene..."
+                }
+                className="flex-1 resize-none overflow-hidden bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
+                style={{ minHeight: "2.25rem", maxHeight: "10rem" }}
+              />
+              <button
+                onClick={handleSubmit}
+                disabled={
+                  isLoading ||
+                  isPreparingImage ||
+                  (!input.trim() && !referenceImage)
+                }
+                className="shrink-0 p-2 rounded-lg bg-neutral-700 hover:bg-neutral-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-neutral-200"
+              >
+                <SendHorizontal className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </>
       )}

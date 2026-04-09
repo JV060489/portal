@@ -41,9 +41,21 @@ Rules:
 - Keep the footprint centered near the origin in X and Y so preview placement is stable.
 - Avoid wrapping the whole model in a final arbitrary rotate() unless the prompt explicitly requires it.
 - Prefer sensible, compact dimensions and avoid extremely tiny or extremely huge values.
+- Generate manifold, watertight solid geometry only.
+- Avoid infinitely thin walls, open surfaces, coplanar overlapping faces, self-intersections, non-positive dimensions, and boolean operations that merely touch at a face/edge/point.
+- Give shells, rims, plates, text, raised details, engraved details, connectors, and decorative features explicit positive thickness and real overlap with the main body.
 - Do not include colors or rendering notes.
 - Do not include markdown fences.
 - Prefer clean constructive solid geometry that compiles reliably in OpenSCAD.`;
+
+const OPENSCAD_REFERENCE_IMAGE_RULES = `Reference image rules:
+- The attached image is the shape authority. Do not create a generic instance of the named object.
+- Match the visible silhouette first: height-to-width ratio, belly/shoulder height, neck length, lip flare, base taper, foot/base details, handles/spouts/cutouts.
+- Model decorative surface geometry only when possible as shallow raised/engraved relief; ignore color-only changes that have no physical boundary.
+- If the user text and image disagree, follow the user's text for task intent and the image for the object's form.`;
+
+const SCENE_REFERENCE_IMAGE_RULES = `The current user message includes a reference image.
+Use it as visual context for generation requests. When you call generate_openscad_object for the referenced object, keep the prompt focused on the user's intent and explicitly mention that the attached reference image must be used for the object's visible form. Do not replace the reference with a generic object.`;
 
 type SceneObject = {
   id: string;
@@ -79,6 +91,12 @@ type InputMessage = {
   content: string;
 };
 
+type ReferenceImage = {
+  dataUrl: string;
+  mediaType: "image/png" | "image/jpeg" | "image/webp";
+  name?: string;
+};
+
 function refreshSceneBoundsContext(liveScene: SceneObject[]) {
   const summaries = computeWorldBoundsMap(
     liveScene.map((obj) => ({
@@ -104,15 +122,45 @@ function refreshSceneBoundsContext(liveScene: SceneObject[]) {
   }
 }
 
+function getReferenceImageBytes(referenceImage: ReferenceImage): Uint8Array {
+  const base64Payload = referenceImage.dataUrl.split(",")[1];
+  if (!base64Payload) {
+    throw new Error("Reference image data is invalid.");
+  }
+
+  return new Uint8Array(Buffer.from(base64Payload, "base64"));
+}
+
 async function generateOpenScadCode(
   model: string,
   provider: ReturnType<typeof createOpenAI>,
   prompt: string,
+  referenceImage?: ReferenceImage,
 ): Promise<string> {
   const result = await generateText({
     model: provider(model),
-    system: OPENSCAD_CODE_PROMPT,
-    prompt,
+    system: referenceImage
+      ? `${OPENSCAD_CODE_PROMPT}
+
+${OPENSCAD_REFERENCE_IMAGE_RULES}`
+      : OPENSCAD_CODE_PROMPT,
+    ...(referenceImage
+      ? {
+          messages: [
+            {
+              role: "user" as const,
+              content: [
+                { type: "text" as const, text: prompt },
+                {
+                  type: "image" as const,
+                  image: getReferenceImageBytes(referenceImage),
+                  mediaType: referenceImage.mediaType,
+                },
+              ],
+            },
+          ],
+        }
+      : { prompt }),
     temperature: 0.2,
   });
 
@@ -120,6 +168,68 @@ async function generateOpenScadCode(
     .replace(/^```(?:openscad)?\s*/i, "")
     .replace(/```$/, "")
     .trim();
+}
+
+function buildGeneratedPromptForStorage(
+  prompt: string,
+  referenceImage?: ReferenceImage,
+): string {
+  if (!referenceImage) return prompt;
+
+  return `${prompt}
+
+Reference image attached during generation: ${referenceImage.name ?? referenceImage.mediaType}`;
+}
+
+function buildOpenScadUserPrompt(
+  prompt: string,
+  referenceImage?: ReferenceImage,
+): string {
+  if (!referenceImage) return prompt;
+
+  return `${prompt}
+
+Use the attached reference image as the concrete visual specification for the object's visible form. Match that image; do not create a generic version of the requested noun.`;
+}
+
+function attachReferenceImageToLatestUserMessage(
+  messages: InputMessage[],
+  referenceImage?: ReferenceImage,
+): ModelMessage[] {
+  const modelMessages: ModelMessage[] = messages.map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
+
+  if (!referenceImage) return modelMessages;
+
+  const lastUserIndex = modelMessages.findLastIndex(
+    (message) => message.role === "user",
+  );
+
+  if (lastUserIndex === -1) return modelMessages;
+
+  const lastUserMessage = modelMessages[lastUserIndex];
+  if (lastUserMessage.role !== "user") return modelMessages;
+
+  modelMessages[lastUserIndex] = {
+    ...lastUserMessage,
+    content: [
+      {
+        type: "text",
+        text: `${String(lastUserMessage.content)}
+
+Attached reference image: use this image as visual context for the requested object.`,
+      },
+      {
+        type: "image",
+        image: getReferenceImageBytes(referenceImage),
+        mediaType: referenceImage.mediaType,
+      },
+    ],
+  };
+
+  return modelMessages;
 }
 
 export const aiChatFunction = inngest.createFunction(
@@ -140,17 +250,22 @@ export const aiChatFunction = inngest.createFunction(
     },
   },
   async ({ event, step, logger }) => {
-    const { jobId, messages, model, sceneContext, userId } = event.data as {
+    const { jobId, messages, model, sceneContext, userId, referenceImage } =
+      event.data as {
       jobId: string;
       messages: InputMessage[];
       model: string;
       sceneContext: SceneObject[];
       userId: string;
+      referenceImage?: ReferenceImage;
     };
 
     const result = await step.run("generate", async () => {
       const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      const modelMessages: ModelMessage[] = messages;
+      const modelMessages = attachReferenceImageToLatestUserMessage(
+        messages,
+        referenceImage,
+      );
 
       // Mutable scene state so list_objects reflects additions/deletions mid-conversation
       const liveScene: SceneObject[] = sceneContext.map((o) => ({ ...o }));
@@ -158,7 +273,11 @@ export const aiChatFunction = inngest.createFunction(
 
       const aiResult = await generateText({
         model: provider(model),
-        system: SYSTEM_PROMPT,
+        system: referenceImage
+          ? `${SYSTEM_PROMPT}
+
+${SCENE_REFERENCE_IMAGE_RULES}`
+          : SYSTEM_PROMPT,
         messages: modelMessages,
         stopWhen: stepCountIs(10),
         experimental_telemetry: {
@@ -193,10 +312,19 @@ export const aiChatFunction = inngest.createFunction(
                 prompt: string;
                 name?: string;
               };
+              const codePrompt = buildOpenScadUserPrompt(
+                prompt,
+                referenceImage,
+              );
+              const generatedPrompt = buildGeneratedPromptForStorage(
+                prompt,
+                referenceImage,
+              );
               const openscadCode = await generateOpenScadCode(
                 model,
                 provider,
-                prompt,
+                codePrompt,
+                referenceImage,
               );
               const id = crypto.randomUUID();
               const resolvedName = name ?? "Generated Object";
@@ -216,7 +344,7 @@ export const aiChatFunction = inngest.createFunction(
                 sy: 1,
                 sz: 1,
                 localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
-                generatedPrompt: prompt,
+                generatedPrompt,
               });
               refreshSceneBoundsContext(liveScene);
               return {
@@ -226,7 +354,7 @@ export const aiChatFunction = inngest.createFunction(
                 geometry: "generated",
                 geometryKind: "generated",
                 sourceKind: "openscad",
-                generatedPrompt: prompt,
+                generatedPrompt,
                 openscadCode,
               };
             },
@@ -390,6 +518,11 @@ export const aiChatFunction = inngest.createFunction(
         model,
         userId,
         jobId,
+        referenceImage: {
+          present: Boolean(referenceImage),
+          mediaType: referenceImage?.mediaType,
+          name: referenceImage?.name,
+        },
         finalText: aiResult.text,
         finishReason: aiResult.finishReason,
         totalSteps: aiResult.steps.length,
@@ -406,6 +539,8 @@ export const aiChatFunction = inngest.createFunction(
         userId,
         totalSteps: result.totalSteps,
         writeCallCount: result.writeCalls.length,
+        referenceImagePresent: result.referenceImage.present,
+        referenceImageName: result.referenceImage.name,
         finishReason: result.finishReason,
         usage: result.usage,
       });
