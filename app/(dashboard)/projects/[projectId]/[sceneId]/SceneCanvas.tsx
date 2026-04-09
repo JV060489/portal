@@ -232,15 +232,21 @@ function SelectedObjectOutline({
 function GeneratedMeshContent({
   objectId,
   objectData,
+  onStatusChange,
 }: {
   objectId: string;
   objectData: SceneObjectData;
+  onStatusChange?: (status: "idle" | "compiling" | "ready" | "error") => void;
 }) {
   const { geometry, bounds, status, error } = useOpenScadPreview(
     objectData.openscadCode,
     objectData.geometryRevision ?? 1,
   );
   const { writeObjectData } = useYjsObject(objectId);
+
+  useEffect(() => {
+    onStatusChange?.(status);
+  }, [onStatusChange, status]);
 
   useEffect(() => {
     const currentBounds = sanitizeLocalBounds(objectData.localBounds);
@@ -293,15 +299,31 @@ function GeneratedMeshContent({
 function SceneMesh({
   objectId,
   objectData,
+  onGeneratedStatusChange,
 }: {
   objectId: string;
   objectData: SceneObjectData;
+  onGeneratedStatusChange?: (
+    status: "idle" | "compiling" | "ready" | "error",
+  ) => void;
 }) {
   if (objectData.geometryKind === "generated") {
-    return <GeneratedMeshContent objectId={objectId} objectData={objectData} />;
+    return (
+      <GeneratedMeshContent
+        objectId={objectId}
+        objectData={objectData}
+        onStatusChange={onGeneratedStatusChange}
+      />
+    );
   }
 
   return <ObjectGeometry geometry={objectData.geometry} />;
+}
+
+function isCanvasReadyObject(object: SceneObjectData | undefined | null) {
+  return (
+    object?.geometryKind !== "generated" || object.compileStatus === "ready"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +446,22 @@ function SceneObject({
   const [materialColor, setMaterialColor] = useState(
     objectData?.materialColor ?? "#4f8fff",
   );
+  const [generatedPreviewStatus, setGeneratedPreviewStatus] = useState<
+    "idle" | "compiling" | "ready" | "error"
+  >("idle");
+  const isCanvasReady =
+    objectData?.geometryKind === "generated"
+      ? generatedPreviewStatus === "ready"
+      : isCanvasReadyObject(objectData);
+  const guardedRaycast = useCallback(
+    (raycaster: THREE.Raycaster, intersects: THREE.Intersection[]) => {
+      const mesh = meshRef.current;
+      if (!isCanvasReady || !mesh) return;
+
+      THREE.Mesh.prototype.raycast.call(mesh, raycaster, intersects);
+    },
+    [isCanvasReady],
+  );
 
   const setGroupRef = useCallback(
     (node: THREE.Group | null) => {
@@ -503,7 +541,10 @@ function SceneObject({
       {/* The actual mesh — at identity transform within the group */}
       <mesh
         ref={meshRef}
+        visible={isCanvasReady}
+        raycast={guardedRaycast}
         onClick={(e) => {
+          if (!isCanvasReady) return;
           e.stopPropagation();
           onSelect(objectId, {
             shiftKey: e.shiftKey,
@@ -512,12 +553,16 @@ function SceneObject({
         }}
       >
         {objectData ? (
-          <SceneMesh objectId={objectId} objectData={objectData} />
+          <SceneMesh
+            objectId={objectId}
+            objectData={objectData}
+            onGeneratedStatusChange={setGeneratedPreviewStatus}
+          />
         ) : (
           <ObjectGeometry geometry="box" />
         )}
         <meshStandardMaterial color={materialColor} />
-        {isSelected && (
+        {isSelected && isCanvasReady && (
           <SelectedObjectOutline meshRef={meshRef} isPrimary={isPrimary} />
         )}
       </mesh>
@@ -1183,6 +1228,17 @@ function SceneContent({
   }, [objects]);
 
   const primaryGroup = primaryId ? (groupMap[primaryId] ?? null) : null;
+  const primaryObject = primaryId
+    ? objects.find((object) => object.id === primaryId)
+    : null;
+  const canTransformPrimary =
+    Boolean(primaryGroup) && isCanvasReadyObject(primaryObject);
+  const transformableSelectedIds = useMemo(() => {
+    const objectMap = new Map(objects.map((object) => [object.id, object]));
+    return new Set(
+      [...selectedIds].filter((id) => isCanvasReadyObject(objectMap.get(id))),
+    );
+  }, [objects, selectedIds]);
 
   return (
     <>
@@ -1203,18 +1259,18 @@ function SceneContent({
           onGroupReadyMap={handleGroupReady}
         />
       ))}
-      {primaryId && primaryGroup && selectedIds.size === 1 && (
+      {primaryId && canTransformPrimary && selectedIds.size === 1 && (
         <SelectedObjectControls
           key={primaryId}
           objectId={primaryId}
-          groupObject={primaryGroup}
+          groupObject={primaryGroup!}
           transformMode={transformMode}
           axisConstraint={axisConstraint}
         />
       )}
-      {selectedIds.size > 1 && (
+      {transformableSelectedIds.size > 1 && (
         <GroupTransformControls
-          selectedIds={selectedIds}
+          selectedIds={transformableSelectedIds}
           groupMap={groupMap}
           transformMode={transformMode}
           axisConstraint={axisConstraint}
