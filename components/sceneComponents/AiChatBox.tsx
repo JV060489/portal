@@ -223,7 +223,8 @@ export function AiChatBox({
           addGeneratedObject(name, openscadCode, generatedPrompt, presetId);
           break;
         }
-        case "edit_openscad_object": {
+        case "edit_openscad_object":
+        case "update_openscad_parameters": {
           if (!connected) break;
           const objectsMap = sceneMap.get("objects") as
             | Y.Map<Y.Map<unknown>>
@@ -453,6 +454,8 @@ export function AiChatBox({
               materialColor: o.materialColor,
               openscadCode: o.openscadCode,
               generatedPrompt: o.generatedPrompt,
+              compileStatus: o.compileStatus,
+              compileError: o.compileError,
             };
           }),
         }),

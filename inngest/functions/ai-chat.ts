@@ -35,7 +35,8 @@ const OPENSCAD_CODE_PROMPT = `You generate only valid OpenSCAD for a single 3D o
 Rules:
 - Return only raw OpenSCAD code.
 - The model must be a single printable 3D object.
-- Use clear top-level parameters for important dimensions.
+- Make the object useful as CAD, not just visually suggestive: include functional dimensions, clearances, thicknesses, hole sizes, spacing, support/contact surfaces, and manufacturable proportions when relevant.
+- Initialize and declare clear top-level parameters for important dimensions before modules/geometry. Never create parameters for color.
 - Author the model in OpenSCAD's native Z-up coordinate system.
 - Make the object stand upright with its base resting on the z=0 plane.
 - Keep the footprint centered near the origin in X and Y so preview placement is stable.
@@ -50,9 +51,54 @@ Rules:
 - Generate manifold, watertight solid geometry only.
 - Avoid infinitely thin walls, open surfaces, coplanar overlapping faces, self-intersections, non-positive dimensions, and boolean operations that merely touch at a face/edge/point.
 - Give shells, rims, plates, text, raised details, engraved details, connectors, and decorative features explicit positive thickness and real overlap with the main body.
+- For plates, brackets, mounts, gears, holders, adapters, and mechanical parts, prefer dimensioned CSG: start from a solid body, subtract holes/cutouts with difference(), use named parameters for hole diameter/count/spacing, and add fillets/chamfers/rounded corners where practical.
+- For requests with counts, patterns, symmetry, or holes, compute placements from parameters and loops. Do not eyeball or randomly scatter features.
+- If editing existing OpenSCAD, preserve useful existing parameters/modules unless the requested edit conflicts with them.
 - Do not include colors or rendering notes.
 - Do not include markdown fences.
-- Prefer clean constructive solid geometry that compiles reliably in OpenSCAD.`;
+- Prefer clean constructive solid geometry that compiles reliably in OpenSCAD.
+
+Example pattern for a useful bracket:
+plate_length = 120;
+plate_width = 36;
+plate_thickness = 6;
+hole_diameter = 5;
+hole_count = 8;
+corner_radius = 4;
+$fn = 96;
+
+difference() {
+  linear_extrude(height = plate_thickness)
+    offset(r = corner_radius)
+      offset(delta = -corner_radius)
+        square([plate_length, plate_width], center = true);
+
+  for (i = [0 : hole_count - 1]) {
+    translate([
+      -plate_length / 2 + 15 + i * ((plate_length - 30) / (hole_count - 1)),
+      0,
+      -0.5
+    ])
+      cylinder(h = plate_thickness + 1, d = hole_diameter);
+  }
+}`;
+
+const OPENSCAD_REPAIR_PROMPT = `You repair OpenSCAD code.
+
+Return only corrected raw OpenSCAD code. Keep the user's requested object and the existing useful parameters. Fix syntax, invalid constructs, non-manifold geometry, zero/negative dimensions, disconnected parts, missing semicolons/braces, and code that is only decorative rather than CAD-useful. Do not include markdown fences or explanations.`;
+
+const OPENSCAD_THINKING_PROMPT = `You are planning an OpenSCAD model before code generation.
+
+Analyze the requested object carefully and produce a concise implementation brief for a later strict OpenSCAD code generator.
+
+Rules:
+- Do not output OpenSCAD code.
+- Do not include hidden chain-of-thought or private reasoning transcripts.
+- If a reference image is attached, inspect it as the concrete visual specification and describe the visible silhouette, proportions, and geometry-relevant details.
+- Identify the best OpenSCAD construction strategy: main primitives, rotate_extrude or linear_extrude profiles, hull/minkowski usage, boolean operations, helper modules, and parameter names.
+- For functional/mechanical requests, identify concrete dimensions, hole counts, hole spacing, thicknesses, clearances, symmetry, loops, and which features should be subtracted with difference().
+- Call out printability constraints, wall thickness, real overlaps between connected parts, manifold geometry, centering, z=0 base placement, and smoothness requirements.
+- Keep the brief direct and implementation-focused.`;
 
 const OPENSCAD_REFERENCE_IMAGE_RULES = `Reference image rules:
 - The attached image is the shape authority. Do not create a generic instance of the named object.
@@ -73,6 +119,35 @@ const SELECTION_RULES = `Selection rules:
 - For shape/form/detail edits to a selected object, call edit_openscad_object instead of generate_openscad_object.
 - For multi-selection shape edits, edit the primary selected object unless the user clearly identifies multiple selected targets. Ask a brief question if the target is still ambiguous.
 - If the user clearly asks to create/add/generate a new object, call generate_openscad_object. You may still use the selection for placement/reference.`;
+
+const OPENSCAD_WORKFLOW_RULES = `OpenSCAD workflow:
+- Treat generate_openscad_object and edit_openscad_object as planning-phase tools. They queue a later strict OpenSCAD generation phase.
+- In prompt/editPrompt, preserve the user's shape intent and include only concise geometry requirements the OpenSCAD generator needs.
+- For simple parameter-only changes on an existing OpenSCAD object, use update_openscad_parameters instead of regenerating the model.
+- Do not mention phases, tools, prompts, or internal implementation details to the user.`;
+
+const OPENSCAD_THINKING_MAX_OUTPUT_TOKENS = 500;
+const OPENSCAD_THINKING_MAX_COMPLETION_TOKENS = 1200;
+const OPENSCAD_CODE_MAX_OUTPUT_TOKENS = 6000;
+const OPENSCAD_CODE_MAX_COMPLETION_TOKENS = 8000;
+
+const OPENSCAD_THINKING_PROVIDER_OPTIONS = {
+  openai: {
+    reasoningEffort: "medium",
+    forceReasoning: true,
+    maxCompletionTokens: OPENSCAD_THINKING_MAX_COMPLETION_TOKENS,
+    textVerbosity: "medium",
+  },
+} as const;
+
+const OPENSCAD_CODE_PROVIDER_OPTIONS = {
+  openai: {
+    reasoningEffort: "low",
+    forceReasoning: false,
+    maxCompletionTokens: OPENSCAD_CODE_MAX_COMPLETION_TOKENS,
+    textVerbosity: "medium",
+  },
+} as const;
 
 type SceneObject = {
   id: string;
@@ -96,6 +171,8 @@ type SceneObject = {
   materialColor?: string;
   openscadCode?: string;
   generatedPrompt?: string;
+  compileStatus?: "idle" | "compiling" | "ready" | "error";
+  compileError?: string;
 };
 
 const GENERATED_OBJECT_BOUNDS_ESTIMATE: LocalBounds = {
@@ -114,6 +191,48 @@ type ReferenceImage = {
   dataUrl: string;
   mediaType: "image/png" | "image/jpeg" | "image/webp";
   name?: string;
+};
+
+type OpenScadGenerationTask =
+  | {
+      toolCallId: string;
+      toolName: "generate_openscad_object";
+      objectId: string;
+      name: string;
+      prompt: string;
+      codePrompt: string;
+      generatedPrompt: string;
+    }
+  | {
+      toolCallId: string;
+      toolName: "edit_openscad_object";
+      objectId: string;
+      name: string;
+      editPrompt: string;
+      codePrompt: string;
+      generatedPrompt: string;
+    };
+
+type OpenScadThinkingResult = {
+  toolCallId: string;
+  brief: string;
+  usedFallback: boolean;
+};
+
+type GeneratedOpenScadCode = {
+  toolCallId: string;
+  openscadCode: string;
+};
+
+type QueuedWriteCall = {
+  toolCallId?: string;
+  toolName: string;
+  args: Record<string, unknown>;
+};
+
+type WriteCall = {
+  toolName: string;
+  args: Record<string, unknown>;
 };
 
 function refreshSceneBoundsContext(liveScene: SceneObject[]) {
@@ -186,16 +305,155 @@ function buildSelectionContext(
       sz: object.sz,
       worldAnchors: object.worldAnchors,
       generatedPrompt: object.generatedPrompt,
+      compileStatus: object.compileStatus,
+      compileError: object.compileError,
     })),
   )}`;
+}
+
+function buildOpenScadMessages(
+  prompt: string,
+  referenceImage?: ReferenceImage,
+): ModelMessage[] | undefined {
+  if (!referenceImage) return undefined;
+
+  return [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: prompt },
+        {
+          type: "image",
+          image: getReferenceImageBytes(referenceImage),
+          mediaType: referenceImage.mediaType,
+        },
+      ],
+    },
+  ];
+}
+
+function buildFallbackOpenScadBrief(task: OpenScadGenerationTask): string {
+  const taskText =
+    task.toolName === "edit_openscad_object"
+      ? `Edit request: ${task.editPrompt}`
+      : `Generation request: ${task.prompt}`;
+
+  return `${taskText}
+
+Use the user request as the source of truth. Build a compact, parameterized, manifold OpenSCAD object centered on the footprint origin with its base on z=0. Prefer simple reliable CSG, real overlapping connections, positive wall/detail thickness, and smooth high-$fn curves where the requested form has round features. If a reference image is attached, match its visible proportions and silhouette.`;
+}
+
+function stripOpenScadFences(code: string): string {
+  return code
+    .replace(/^```(?:openscad)?\s*/i, "")
+    .replace(/```$/, "")
+    .trim();
+}
+
+function scoreOpenScadCode(code: string): number {
+  if (!code || code.length < 20) return 0;
+
+  const patterns = [
+    /\b(cube|sphere|cylinder|polyhedron)\s*\(/gi,
+    /\b(union|difference|intersection)\s*\(\s*\)/gi,
+    /\b(translate|rotate|scale|mirror)\s*\(/gi,
+    /\b(linear_extrude|rotate_extrude)\s*\(/gi,
+    /\b(module|function)\s+\w+\s*\(/gi,
+    /\$fn\s*=/gi,
+    /\bfor\s*\(/gi,
+    /^\s*[A-Za-z_]\w*\s*=\s*[^;]+;/gm,
+    /;\s*$/gm,
+  ];
+
+  return patterns.reduce((score, pattern) => {
+    const matches = code.match(pattern);
+    return score + (matches?.length ?? 0);
+  }, 0);
+}
+
+function shouldRepairOpenScadCode(code: string): boolean {
+  return code === "404" || scoreOpenScadCode(code) < 3;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatOpenScadParameterValue(
+  existingValue: string,
+  requestedValue: string,
+): string {
+  const trimmed = requestedValue.trim().replace(/;.*$/s, "");
+  const existing = existingValue.trim();
+
+  if (/^["']/.test(existing)) {
+    return `"${trimmed.replace(/"/g, '\\"')}"`;
+  }
+
+  if (/^(true|false)$/i.test(existing)) {
+    return /^(true|1|yes)$/i.test(trimmed) ? "true" : "false";
+  }
+
+  if (/^-?\d+(?:\.\d+)?$/.test(existing)) {
+    const numericValue = Number(trimmed);
+    if (Number.isFinite(numericValue)) return String(numericValue);
+  }
+
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed) || /^(true|false)$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^\[[\d\s,.\-+*/()]+\]$/.test(trimmed)) return trimmed;
+
+  return existing;
+}
+
+function applyOpenScadParameterUpdates(
+  code: string,
+  updates: Array<{ name: string; value: string }>,
+): { code: string; applied: string[] } {
+  let patchedCode = code;
+  const applied: string[] = [];
+
+  for (const update of updates) {
+    const name = update.name.trim();
+    if (!/^[A-Za-z_]\w*$/.test(name)) continue;
+
+    const declaration = new RegExp(
+      `^(\\s*${escapeRegExp(name)}\\s*=\\s*)([^;]+)(;.*)$`,
+      "m",
+    );
+
+    patchedCode = patchedCode.replace(
+      declaration,
+      (fullMatch, prefix: string, existingValue: string, suffix: string) => {
+        const nextValue = formatOpenScadParameterValue(
+          existingValue,
+          update.value,
+        );
+        if (nextValue === existingValue.trim()) return fullMatch;
+
+        applied.push(name);
+        return `${prefix}${nextValue}${suffix}`;
+      },
+    );
+  }
+
+  return { code: patchedCode, applied };
 }
 
 async function generateOpenScadCode(
   model: string,
   provider: ReturnType<typeof createOpenAI>,
   prompt: string,
+  planningBrief: string,
   referenceImage?: ReferenceImage,
 ): Promise<string> {
+  const codePrompt = `${prompt}
+
+OpenSCAD generation brief from the planning pass:
+${planningBrief}`;
+  const codeMessages = buildOpenScadMessages(codePrompt, referenceImage);
   const result = await generateText({
     model: provider(model),
     system: referenceImage
@@ -203,30 +461,85 @@ async function generateOpenScadCode(
 
 ${OPENSCAD_REFERENCE_IMAGE_RULES}`
       : OPENSCAD_CODE_PROMPT,
-    ...(referenceImage
-      ? {
-          messages: [
-            {
-              role: "user" as const,
-              content: [
-                { type: "text" as const, text: prompt },
-                {
-                  type: "image" as const,
-                  image: getReferenceImageBytes(referenceImage),
-                  mediaType: referenceImage.mediaType,
-                },
-              ],
-            },
-          ],
-        }
-      : { prompt }),
+    ...(codeMessages ? { messages: codeMessages } : { prompt: codePrompt }),
+    maxOutputTokens: OPENSCAD_CODE_MAX_OUTPUT_TOKENS,
     temperature: 0.2,
+    providerOptions: OPENSCAD_CODE_PROVIDER_OPTIONS,
   });
 
-  return result.text
-    .replace(/^```(?:openscad)?\s*/i, "")
-    .replace(/```$/, "")
-    .trim();
+  const code = stripOpenScadFences(result.text);
+  if (!shouldRepairOpenScadCode(code)) return code;
+
+  return repairOpenScadCode(model, provider, {
+    prompt,
+    planningBrief,
+    code,
+    referenceImage,
+  });
+}
+
+async function repairOpenScadCode(
+  model: string,
+  provider: ReturnType<typeof createOpenAI>,
+  {
+    prompt,
+    planningBrief,
+    code,
+    referenceImage,
+    error,
+  }: {
+    prompt: string;
+    planningBrief: string;
+    code: string;
+    referenceImage?: ReferenceImage;
+    error?: string;
+  },
+): Promise<string> {
+  const repairPrompt = `${prompt}
+
+Planning brief:
+${planningBrief}
+
+${error ? `OpenSCAD error to fix:\n${error}\n\n` : ""}Code to repair:
+${code}`;
+  const repairMessages = buildOpenScadMessages(repairPrompt, referenceImage);
+  const repairResult = await generateText({
+    model: provider(model),
+    system: referenceImage
+      ? `${OPENSCAD_REPAIR_PROMPT}
+
+${OPENSCAD_REFERENCE_IMAGE_RULES}`
+      : OPENSCAD_REPAIR_PROMPT,
+    ...(repairMessages ? { messages: repairMessages } : { prompt: repairPrompt }),
+    maxOutputTokens: OPENSCAD_CODE_MAX_OUTPUT_TOKENS,
+    temperature: 0.1,
+    providerOptions: OPENSCAD_CODE_PROVIDER_OPTIONS,
+  });
+
+  return stripOpenScadFences(repairResult.text);
+}
+
+async function thinkThroughOpenScadGeneration(
+  model: string,
+  provider: ReturnType<typeof createOpenAI>,
+  prompt: string,
+  referenceImage?: ReferenceImage,
+): Promise<string> {
+  const thinkingMessages = buildOpenScadMessages(prompt, referenceImage);
+  const result = await generateText({
+    model: provider(model),
+    system: referenceImage
+      ? `${OPENSCAD_THINKING_PROMPT}
+
+${OPENSCAD_REFERENCE_IMAGE_RULES}`
+      : OPENSCAD_THINKING_PROMPT,
+    ...(thinkingMessages ? { messages: thinkingMessages } : { prompt }),
+    maxOutputTokens: OPENSCAD_THINKING_MAX_OUTPUT_TOKENS,
+    temperature: 0.2,
+    providerOptions: OPENSCAD_THINKING_PROVIDER_OPTIONS,
+  });
+
+  return result.text.trim();
 }
 
 function buildGeneratedPromptForStorage(
@@ -265,6 +578,11 @@ function buildOpenScadEditPrompt({
     ? `Current OpenSCAD code:
 ${currentCode}`
     : `The selected object is currently a ${target.geometry} primitive. Replace it with an OpenSCAD object that satisfies the requested edit while preserving the user's intent.`;
+  const compileErrorContext =
+    target.compileStatus === "error" && target.compileError
+      ? `Current OpenSCAD compile error to fix while applying the edit:
+${target.compileError}`
+      : "";
 
   return buildOpenScadUserPrompt(
     `Edit the existing selected scene object in place.
@@ -279,6 +597,8 @@ ${JSON.stringify(
     generatedPrompt: target.generatedPrompt,
     localBounds: target.localBounds,
     worldBounds: target.worldBounds,
+    compileStatus: target.compileStatus,
+    compileError: target.compileError,
   },
   null,
   2,
@@ -288,6 +608,8 @@ Requested edit:
 ${editPrompt}
 
 ${existingModelContext}
+
+${compileErrorContext}
 
 Return a complete replacement OpenSCAD model for this same object. Keep the object upright, standing on z=0, and centered around the footprint origin so the current scene transform still places it correctly.`,
     referenceImage,
@@ -334,6 +656,43 @@ Attached reference image: use this image as visual context for the requested obj
   return modelMessages;
 }
 
+function attachGeneratedOpenScadCode(
+  writeCalls: QueuedWriteCall[],
+  generatedOpenScad: GeneratedOpenScadCode[],
+): WriteCall[] {
+  const generatedByToolCallId = new Map(
+    generatedOpenScad.map((result) => [result.toolCallId, result]),
+  );
+
+  return writeCalls.flatMap((call) => {
+    if (
+      call.toolName !== "generate_openscad_object" &&
+      call.toolName !== "edit_openscad_object"
+    ) {
+      return [{ toolName: call.toolName, args: call.args }];
+    }
+
+    const generated = call.toolCallId
+      ? generatedByToolCallId.get(call.toolCallId)
+      : undefined;
+
+    if (!generated) {
+      if (call.args.ok === false) return [];
+      throw new Error(`Missing OpenSCAD generation for ${call.toolName}.`);
+    }
+
+    return [
+      {
+        toolName: call.toolName,
+        args: {
+          ...call.args,
+          openscadCode: generated.openscadCode,
+        },
+      },
+    ];
+  });
+}
+
 export const aiChatFunction = inngest.createFunction(
   {
     id: "ai-chat",
@@ -370,7 +729,7 @@ export const aiChatFunction = inngest.createFunction(
       selectedObjectIds?: string[];
     };
 
-    const result = await step.run("generate", async () => {
+    const thinkingResult = await step.run("think", async () => {
       const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const modelMessages = attachReferenceImageToLatestUserMessage(
         messages,
@@ -388,12 +747,15 @@ export const aiChatFunction = inngest.createFunction(
         selectedObjectIds,
         selectedObjects,
       );
+      const pendingOpenScadGenerations: OpenScadGenerationTask[] = [];
 
       const aiResult = await generateText({
         model: provider(model),
         system: `${SYSTEM_PROMPT}
 
 ${SELECTION_RULES}
+
+${OPENSCAD_WORKFLOW_RULES}
 
 ${selectionContext}${referenceImage ? `
 
@@ -443,7 +805,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
               },
               required: ["prompt"],
             }),
-            execute: async (input) => {
+            execute: async (input, { toolCallId }) => {
               const { prompt, name } = input as {
                 prompt: string;
                 name?: string;
@@ -456,14 +818,17 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 prompt,
                 referenceImage,
               );
-              const openscadCode = await generateOpenScadCode(
-                model,
-                provider,
-                codePrompt,
-                referenceImage,
-              );
               const id = crypto.randomUUID();
               const resolvedName = name ?? "Generated Object";
+              pendingOpenScadGenerations.push({
+                toolCallId,
+                toolName: "generate_openscad_object",
+                objectId: id,
+                name: resolvedName,
+                prompt,
+                codePrompt,
+                generatedPrompt,
+              });
               liveScene.push({
                 id,
                 geometry: "generated",
@@ -480,7 +845,6 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 sy: 1,
                 sz: 1,
                 localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
-                openscadCode,
                 generatedPrompt,
               });
               refreshSceneBoundsContext(liveScene);
@@ -492,7 +856,6 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 geometryKind: "generated",
                 sourceKind: "openscad",
                 generatedPrompt,
-                openscadCode,
               };
             },
           }),
@@ -515,7 +878,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
               },
               required: ["objectId", "editPrompt"],
             }),
-            execute: async (input) => {
+            execute: async (input, { toolCallId }) => {
               const { objectId, editPrompt, name } = input as {
                 objectId: string;
                 editPrompt: string;
@@ -531,24 +894,26 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 editPrompt,
                 referenceImage,
               });
-              const openscadCode = await generateOpenScadCode(
-                model,
-                provider,
-                codePrompt,
-                referenceImage,
-              );
               const generatedPrompt = buildGeneratedPromptForStorage(
                 `Edit ${target.name}: ${editPrompt}`,
                 referenceImage,
               );
               const resolvedName = name ?? target.name;
+              pendingOpenScadGenerations.push({
+                toolCallId,
+                toolName: "edit_openscad_object",
+                objectId,
+                name: resolvedName,
+                editPrompt,
+                codePrompt,
+                generatedPrompt,
+              });
 
               Object.assign(target, {
                 name: resolvedName,
                 geometry: "generated",
                 geometryKind: "generated" as const,
                 sourceKind: "openscad" as const,
-                openscadCode,
                 generatedPrompt,
                 localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
               });
@@ -562,7 +927,75 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 geometryKind: "generated",
                 sourceKind: "openscad",
                 generatedPrompt,
-                openscadCode,
+              };
+            },
+          }),
+          update_openscad_parameters: tool({
+            description:
+              "Patch top-level OpenSCAD parameter assignments on an existing generated object without regenerating its geometry. Use for simple changes like setting height, width, radius, thickness, hole diameter, hole count, or spacing.",
+            inputSchema: jsonSchema({
+              type: "object" as const,
+              properties: {
+                objectId: { type: "string" },
+                updates: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      value: { type: "string" },
+                    },
+                    required: ["name", "value"],
+                    additionalProperties: false,
+                  },
+                },
+              },
+              required: ["objectId", "updates"],
+            }),
+            execute: async (input) => {
+              const { objectId, updates } = input as {
+                objectId: string;
+                updates: Array<{ name: string; value: string }>;
+              };
+              const target = liveScene.find((object) => object.id === objectId);
+              if (!target?.openscadCode) {
+                return {
+                  ok: false,
+                  error: "Generated OpenSCAD object not found",
+                  objectId,
+                };
+              }
+
+              const patch = applyOpenScadParameterUpdates(
+                target.openscadCode,
+                updates,
+              );
+
+              if (patch.applied.length === 0) {
+                return {
+                  ok: false,
+                  error: "No matching top-level parameters found",
+                  objectId,
+                };
+              }
+
+              target.openscadCode = patch.code;
+              target.generatedPrompt = buildGeneratedPromptForStorage(
+                `Update ${target.name} parameters: ${patch.applied.join(", ")}`,
+                referenceImage,
+              );
+              target.localBounds = GENERATED_OBJECT_BOUNDS_ESTIMATE;
+              target.compileStatus = "idle";
+              target.compileError = undefined;
+              refreshSceneBoundsContext(liveScene);
+
+              return {
+                ok: true,
+                objectId,
+                name: target.name,
+                openscadCode: patch.code,
+                generatedPrompt: target.generatedPrompt,
+                applied: patch.applied,
               };
             },
           }),
@@ -695,7 +1128,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
         };
       });
 
-      const writeCalls: { toolName: string; args: unknown }[] = [];
+      const writeCalls: QueuedWriteCall[] = [];
       for (const s of aiResult.steps) {
         for (const tc of s.toolCalls) {
           if (
@@ -710,7 +1143,8 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
           >;
           if (
             tc.toolName === "generate_openscad_object" ||
-            tc.toolName === "edit_openscad_object"
+            tc.toolName === "edit_openscad_object" ||
+            tc.toolName === "update_openscad_parameters"
           ) {
             const result = s.toolResults?.find(
               (tr) => tr.toolCallId === tc.toolCallId,
@@ -720,6 +1154,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                   .output
               : {};
             writeCalls.push({
+              toolCallId: tc.toolCallId,
               toolName: tc.toolName,
               args: { ...input, ...output },
             });
@@ -744,8 +1179,79 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
         usage: aiResult.usage,
         stepTrace,
         writeCalls,
+        pendingOpenScadGenerations,
       };
     });
+
+    const openScadThinking = await step.run("think-openscad", async () => {
+      if (thinkingResult.pendingOpenScadGenerations.length === 0) {
+        return [] satisfies OpenScadThinkingResult[];
+      }
+
+      const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      return Promise.all(
+        thinkingResult.pendingOpenScadGenerations.map(async (task) => {
+          const brief = await thinkThroughOpenScadGeneration(
+            model,
+            provider,
+            task.codePrompt,
+            referenceImage,
+          );
+
+          return {
+            toolCallId: task.toolCallId,
+            brief: brief || buildFallbackOpenScadBrief(task),
+            usedFallback: !brief,
+          };
+        }),
+      );
+    });
+
+    const generatedOpenScad = await step.run("generate-openscad", async () => {
+      if (thinkingResult.pendingOpenScadGenerations.length === 0) {
+        return [] satisfies GeneratedOpenScadCode[];
+      }
+
+      const thinkingByToolCallId = new Map(
+        openScadThinking.map((result) => [result.toolCallId, result]),
+      );
+      const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      return Promise.all(
+        thinkingResult.pendingOpenScadGenerations.map(async (task) => {
+          const thinking = thinkingByToolCallId.get(task.toolCallId);
+          if (!thinking) {
+            throw new Error(`Missing OpenSCAD thinking for ${task.name}.`);
+          }
+
+          const openscadCode = await generateOpenScadCode(
+            model,
+            provider,
+            task.codePrompt,
+            thinking.brief,
+            referenceImage,
+          );
+
+          if (!openscadCode) {
+            throw new Error(
+              `OpenSCAD generation returned empty code for ${task.name}.`,
+            );
+          }
+
+          return {
+            toolCallId: task.toolCallId,
+            openscadCode,
+          };
+        }),
+      );
+    });
+
+    const result = {
+      ...thinkingResult,
+      writeCalls: attachGeneratedOpenScadCode(
+        thinkingResult.writeCalls,
+        generatedOpenScad,
+      ),
+    };
 
     await step.run("persist", async () => {
       logger.info("AI generation complete", {
@@ -754,6 +1260,11 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
         userId,
         totalSteps: result.totalSteps,
         writeCallCount: result.writeCalls.length,
+        openScadThinkingCount: openScadThinking.length,
+        openScadThinkingFallbackCount: openScadThinking.filter(
+          (item) => item.usedFallback,
+        ).length,
+        openScadGenerationCount: generatedOpenScad.length,
         referenceImagePresent: result.referenceImage.present,
         referenceImageName: result.referenceImage.name,
         finishReason: result.finishReason,
