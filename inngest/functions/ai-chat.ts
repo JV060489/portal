@@ -26,7 +26,7 @@ Rules:
 - Use worldAnchors.center when centering one object on another.
 - Use worldAnchors.bottomCenter -> target worldAnchors.topCenter when placing one object on top of another.
 - To place an existing object anchor at a target point, move its origin by the same world-space delta from its current anchor to that target.
-- Generated OpenSCAD objects are normalized after compile: their local origin is at the footprint's bottom center, local Y is up, and local Y=0 is the object's base.
+- Generated OpenSCAD objects are imported into a meters-based scene: OpenSCAD numeric dimensions are treated as millimeters and converted with 1 OpenSCAD unit = 0.001 scene units. Their local origin is at the footprint's bottom center, local Y is up, and local Y=0 is the object's base.
 - For requests like "create X on the table", do not wait for the generated object's bounds. Generate it, then place it by setting px/pz to the target topCenter X/Z and py to the target topCenter Y.
 - If exact scale, clearance, stacking on top of the generated object, or alignment to the generated object's side depends on its final bounds, create it first and explain that a follow-up is needed after bounds appear.
 - Default to editable parts for OpenSCAD: if the requested object has multiple logical pieces, components, attachments, limbs, panels, handles, wheels, lids, buttons, holes/caps, or separable details, first create a group, then create each logical part as its own OpenSCAD child object with parentId, partRole, transform placement, and relationshipPrompt.
@@ -47,6 +47,7 @@ Rules:
 - Keep the footprint centered near the origin in X and Y so preview placement is stable.
 - Avoid wrapping the whole model in a final arbitrary rotate() unless the prompt explicitly requires it.
 - Prefer sensible, compact dimensions and avoid extremely tiny or extremely huge values.
+- Treat numeric dimensions as millimeters unless the user explicitly asks for another unit system.
 - For curved, round, cylindrical, spherical, organic, sculptural, vase-like, torus-like, or revolved geometry, make surfaces visually smooth.
 - Set a top-level $fn parameter between 160 and 256 whenever the object has curved surfaces, unless the user explicitly asks for low-poly/faceted geometry.
 - Pass adequate $fn values to cylinder(), sphere(), circle(), rotate_extrude(), and curved helper modules when local control is needed.

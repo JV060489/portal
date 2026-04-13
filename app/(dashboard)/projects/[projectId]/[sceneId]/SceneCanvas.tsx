@@ -31,7 +31,11 @@ import {
   useYjsBatchDelete,
   buildChildrenMap,
 } from "@/lib/yjs/hooks";
-import type { SceneObjectData } from "@/lib/yjs/types";
+import {
+  DEFAULT_CAMERA,
+  type CameraData,
+  type SceneObjectData,
+} from "@/lib/yjs/types";
 import SceneObjectTree from "@/components/sceneComponents/SceneObjectTree";
 import { AiChatBox } from "@/components/sceneComponents/AiChatBox";
 import { cn } from "@/lib/utils";
@@ -39,6 +43,26 @@ import { useRenameScene } from "@/features/projects/hooks/use-projects";
 import { useOpenScadPreview } from "@/lib/openscad/use-openscad-preview";
 import { sanitizeLocalBounds } from "@/lib/scene/bounds";
 import { buildRelationshipPrompt } from "@/lib/scene/relationship-prompt";
+
+const LEGACY_METER_SCALE_CAMERA: CameraData = {
+  px: 5,
+  py: 4,
+  pz: 5,
+  tx: 0,
+  ty: 0,
+  tz: 0,
+};
+
+function isSameCamera(a: CameraData, b: CameraData) {
+  return (
+    a.px === b.px &&
+    a.py === b.py &&
+    a.pz === b.pz &&
+    a.tx === b.tx &&
+    a.ty === b.ty &&
+    a.tz === b.tz
+  );
+}
 
 
 // ---------------------------------------------------------------------------
@@ -388,13 +412,25 @@ function CameraSync() {
     const cam = readCamera();
     if (!cam) return;
 
-    camera.position.set(cam.px, cam.py, cam.pz);
+    const activeCamera = isSameCamera(cam, LEGACY_METER_SCALE_CAMERA)
+      ? DEFAULT_CAMERA
+      : cam;
+
+    camera.position.set(activeCamera.px, activeCamera.py, activeCamera.pz);
     if (controlsRef.current) {
-      controlsRef.current.target.set(cam.tx, cam.ty, cam.tz);
+      controlsRef.current.target.set(
+        activeCamera.tx,
+        activeCamera.ty,
+        activeCamera.tz,
+      );
       controlsRef.current.update();
     }
     initialized.current = true;
-  }, [synced, readCamera, camera]);
+
+    if (activeCamera !== cam) {
+      writeCamera(DEFAULT_CAMERA);
+    }
+  }, [synced, readCamera, writeCamera, camera]);
 
   useEffect(() => {
     if (!synced) return;
@@ -442,7 +478,13 @@ function CameraSync() {
   };
 
   return (
-    <OrbitControls ref={controlsRef} makeDefault onEnd={handleCameraEnd} />
+    <OrbitControls
+      ref={controlsRef}
+      makeDefault
+      minDistance={0.01}
+      maxDistance={10}
+      onEnd={handleCameraEnd}
+    />
   );
 }
 
@@ -1329,11 +1371,11 @@ function SceneContent({
       )}
       <Grid
         infiniteGrid
-        cellSize={1}
-        sectionSize={5}
+        cellSize={0.01}
+        sectionSize={0.1}
         cellColor="#333333"
         sectionColor="#555555"
-        fadeDistance={30}
+        fadeDistance={2}
       />
       <CameraSync />
     </>
@@ -1478,9 +1520,13 @@ export default function SceneCanvas({ sceneName, sceneId }: SceneCanvasProps) {
   const batchDelete = useYjsBatchDelete();
 
   const cam = readCamera();
-  const cameraPosition: [number, number, number] = cam
-    ? [cam.px, cam.py, cam.pz]
-    : [5, 4, 5];
+  const activeCamera =
+    cam && !isSameCamera(cam, LEGACY_METER_SCALE_CAMERA) ? cam : DEFAULT_CAMERA;
+  const cameraPosition: [number, number, number] = [
+    activeCamera.px,
+    activeCamera.py,
+    activeCamera.pz,
+  ];
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1602,6 +1648,8 @@ export default function SceneCanvas({ sceneName, sceneId }: SceneCanvasProps) {
               camera={{
                 position: cameraPosition,
                 fov: 50,
+                near: 0.001,
+                far: 100,
               }}
               onPointerMissed={() => handleDeselectAll()}
             >

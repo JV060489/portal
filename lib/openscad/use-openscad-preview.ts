@@ -11,7 +11,7 @@ import {
 import { localBoundsFromGeometry } from "@/lib/scene/bounds";
 import type { LocalBounds } from "@/lib/yjs/types";
 
-const TARGET_MAX_DIMENSION = 1;
+const OPENSCAD_UNIT_TO_SCENE_UNIT = 0.001;
 
 type OpenScadPreviewState = {
   key: string | null;
@@ -83,11 +83,13 @@ export function useOpenScadPreview(
           throw new Error("Generated STL did not contain any mesh vertices.");
         }
 
-        normalizeOpenScadGeometry(geometry);
+        transformOpenScadGeometryToSceneSpace(geometry);
 
-        const normalizedPosition = geometry.getAttribute("position");
-        if (!normalizedPosition || normalizedPosition.count === 0) {
-          throw new Error("Generated geometry became invalid after normalization.");
+        const scenePosition = geometry.getAttribute("position");
+        if (!scenePosition || scenePosition.count === 0) {
+          throw new Error(
+            "Generated geometry became invalid after scene-space transform.",
+          );
         }
 
         geometry.computeVertexNormals();
@@ -152,30 +154,22 @@ export function useOpenScadPreview(
   return state;
 }
 
-function normalizeOpenScadGeometry(geometry: THREE.BufferGeometry) {
+function transformOpenScadGeometryToSceneSpace(geometry: THREE.BufferGeometry) {
   geometry.rotateX(-Math.PI / 2);
+  geometry.scale(
+    OPENSCAD_UNIT_TO_SCENE_UNIT,
+    OPENSCAD_UNIT_TO_SCENE_UNIT,
+    OPENSCAD_UNIT_TO_SCENE_UNIT,
+  );
 
   geometry.computeBoundingBox();
   const boundingBox = geometry.boundingBox;
   if (!boundingBox) return;
 
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-  boundingBox.getSize(size);
-  boundingBox.getCenter(center);
-
-  const maxDimension = Math.max(size.x, size.y, size.z);
-  const scale = maxDimension > 0 ? TARGET_MAX_DIMENSION / maxDimension : 1;
-  geometry.scale(scale, scale, scale);
-
-  geometry.computeBoundingBox();
-  const scaledBox = geometry.boundingBox;
-  if (!scaledBox) return;
-
   const offset = new THREE.Vector3(
-    -(scaledBox.min.x + scaledBox.max.x) / 2,
-    -scaledBox.min.y,
-    -(scaledBox.min.z + scaledBox.max.z) / 2,
+    -(boundingBox.min.x + boundingBox.max.x) / 2,
+    -boundingBox.min.y,
+    -(boundingBox.min.z + boundingBox.max.z) / 2,
   );
   geometry.translate(offset.x, offset.y, offset.z);
   geometry.computeBoundingBox();

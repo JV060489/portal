@@ -85,11 +85,11 @@ export const DEFAULT_META: SceneMeta = {
 };
 
 export const DEFAULT_CAMERA: CameraData = {
-  px: 5,
-  py: 4,
-  pz: 5,
+  px: 0.12,
+  py: 0.08,
+  pz: 0.12,
   tx: 0,
-  ty: 0,
+  ty: 0.02,
   tz: 0,
 };
 
@@ -119,7 +119,7 @@ export const DEFAULT_CUBE: SceneObjectData = {
 export const DEFAULT_SCENE_STATE: SceneStateJSON = {
   meta: DEFAULT_META,
   camera: DEFAULT_CAMERA,
-  objects: { [DEFAULT_CUBE_ID]: DEFAULT_CUBE },
+  objects: {},
 };
 
 // ---------------------------------------------------------------------------
