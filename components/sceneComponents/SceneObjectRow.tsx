@@ -26,6 +26,12 @@ export type SceneTreeNode = {
 export function GeometryIcon({ geometry, className }: { geometry: string; className?: string }) {
   const cls = cn("w-3.5 h-3.5 shrink-0", className);
   switch (geometry) {
+    case "group":
+      return (
+        <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M4 8.5h16M4 15.5h16M7 5h10a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2V7a2 2 0 012-2z" />
+        </svg>
+      );
     case "box":
       return (
         <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>

@@ -26,7 +26,7 @@ export const cameraDataSchema = z.object({
 export const sceneObjectDataSchema = z.object({
   type: z.string(),
   geometry: z.string(),
-  geometryKind: z.enum(["primitive", "generated"]).default("primitive"),
+  geometryKind: z.enum(["primitive", "generated", "group"]).default("primitive"),
   sourceKind: z.enum(["openscad"]).optional(),
   name: z.string(),
   px: z.number(),
@@ -40,6 +40,8 @@ export const sceneObjectDataSchema = z.object({
   sz: z.number(),
   materialColor: z.string(),
   parentId: z.string().optional(),
+  partRole: z.string().optional(),
+  relationshipPrompt: z.string().optional(),
   localBounds: localBoundsSchema.optional(),
   boundsVersion: z.number().default(1),
   geometryRevision: z.number().default(1),
@@ -195,6 +197,23 @@ export function createGeneratedObject(
   name: string,
   openscadCode: string,
   generatedPrompt: string,
+  options: Partial<
+    Pick<
+      SceneObjectData,
+      | "parentId"
+      | "partRole"
+      | "relationshipPrompt"
+      | "px"
+      | "py"
+      | "pz"
+      | "rx"
+      | "ry"
+      | "rz"
+      | "sx"
+      | "sy"
+      | "sz"
+    >
+  > = {},
 ): SceneObjectData {
   return {
     type: "mesh",
@@ -202,20 +221,67 @@ export function createGeneratedObject(
     geometryKind: "generated",
     sourceKind: "openscad",
     name,
-    px: 0,
-    py: 0,
-    pz: 0,
-    rx: 0,
-    ry: 0,
-    rz: 0,
-    sx: 1,
-    sy: 1,
-    sz: 1,
+    px: options.px ?? 0,
+    py: options.py ?? 0,
+    pz: options.pz ?? 0,
+    rx: options.rx ?? 0,
+    ry: options.ry ?? 0,
+    rz: options.rz ?? 0,
+    sx: options.sx ?? 1,
+    sy: options.sy ?? 1,
+    sz: options.sz ?? 1,
     materialColor: "#4f8fff",
+    parentId: options.parentId,
+    partRole: options.partRole,
+    relationshipPrompt: options.relationshipPrompt,
     boundsVersion: 1,
     geometryRevision: 1,
     openscadCode,
     generatedPrompt,
+    compileStatus: "idle",
+  };
+}
+
+export function createGroupObject(
+  name: string,
+  options: Partial<
+    Pick<
+      SceneObjectData,
+      | "parentId"
+      | "partRole"
+      | "relationshipPrompt"
+      | "px"
+      | "py"
+      | "pz"
+      | "rx"
+      | "ry"
+      | "rz"
+      | "sx"
+      | "sy"
+      | "sz"
+    >
+  > = {},
+): SceneObjectData {
+  return {
+    type: "group",
+    geometry: "group",
+    geometryKind: "group",
+    name,
+    px: options.px ?? 0,
+    py: options.py ?? 0,
+    pz: options.pz ?? 0,
+    rx: options.rx ?? 0,
+    ry: options.ry ?? 0,
+    rz: options.rz ?? 0,
+    sx: options.sx ?? 1,
+    sy: options.sy ?? 1,
+    sz: options.sz ?? 1,
+    materialColor: "#4f8fff",
+    parentId: options.parentId,
+    partRole: options.partRole,
+    relationshipPrompt: options.relationshipPrompt,
+    boundsVersion: 1,
+    geometryRevision: 1,
     compileStatus: "idle",
   };
 }

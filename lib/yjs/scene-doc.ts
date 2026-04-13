@@ -162,7 +162,7 @@ export function docToJSON(doc: Y.Doc): SceneStateJSON | null {
   objectsMap.forEach((objMap, id) => {
     const geometry = (objMap.get("geometry") as string) ?? "box";
     const geometryKind =
-      (objMap.get("geometryKind") as "primitive" | "generated" | undefined) ??
+      (objMap.get("geometryKind") as SceneObjectData["geometryKind"] | undefined) ??
       "primitive";
     objects[id] = {
       type: (objMap.get("type") as string) ?? "mesh",
@@ -182,6 +182,9 @@ export function docToJSON(doc: Y.Doc): SceneStateJSON | null {
       sz: (objMap.get("sz") as number) ?? 1,
       materialColor: (objMap.get("materialColor") as string) ?? "#ffffff",
       parentId: (objMap.get("parentId") as string | undefined) ?? undefined,
+      partRole: (objMap.get("partRole") as string | undefined) ?? undefined,
+      relationshipPrompt:
+        (objMap.get("relationshipPrompt") as string | undefined) ?? undefined,
       localBounds:
         (objMap.get("localBounds") as SceneObjectData["localBounds"]) ??
         (geometryKind === "primitive"

@@ -6,16 +6,68 @@ import type { SceneObjectData, CameraData } from "./types";
 import {
   createDefaultObject,
   createGeneratedObject,
+  createGroupObject,
   getPrimitiveLocalBounds,
   type ShapeGeometry,
 } from "./types";
 import { useYjs } from "./provider";
 import { computeWorldMatrix, worldToLocal, decomposeMatrix, writeTransformToMap } from "./transforms";
+import { buildRelationshipPrompt } from "@/lib/scene/relationship-prompt";
+
+const TRANSFORM_FIELDS = new Set(["px", "py", "pz", "rx", "ry", "rz", "sx", "sy", "sz"]);
+
+function hasTransformData(data: Partial<SceneObjectData>) {
+  return Object.keys(data).some((key) => TRANSFORM_FIELDS.has(key));
+}
+
+function readRelationshipObject(objMap: Y.Map<unknown>) {
+  return {
+    name: objMap.get("name") as string | undefined,
+    partRole: objMap.get("partRole") as string | undefined,
+    parentId: objMap.get("parentId") as string | undefined,
+    px: (objMap.get("px") as number | undefined) ?? 0,
+    py: (objMap.get("py") as number | undefined) ?? 0,
+    pz: (objMap.get("pz") as number | undefined) ?? 0,
+    rx: (objMap.get("rx") as number | undefined) ?? 0,
+    ry: (objMap.get("ry") as number | undefined) ?? 0,
+    rz: (objMap.get("rz") as number | undefined) ?? 0,
+    sx: (objMap.get("sx") as number | undefined) ?? 1,
+    sy: (objMap.get("sy") as number | undefined) ?? 1,
+    sz: (objMap.get("sz") as number | undefined) ?? 1,
+  };
+}
+
+function updateRelationshipPrompt(
+  objMap: Y.Map<unknown>,
+  objectsMap: Y.Map<Y.Map<unknown>>,
+  force = false,
+) {
+  if (
+    !force &&
+    !objMap.get("parentId") &&
+    !objMap.get("partRole") &&
+    !objMap.get("relationshipPrompt")
+  ) {
+    return;
+  }
+
+  const object = readRelationshipObject(objMap);
+  const parentMap = object.parentId
+    ? objectsMap.get(object.parentId)
+    : undefined;
+  objMap.set(
+    "relationshipPrompt",
+    buildRelationshipPrompt(
+      object,
+      parentMap ? readRelationshipObject(parentMap) : undefined,
+    ),
+  );
+}
 
 function readObjectDataFromMap(objMap: Y.Map<unknown>): SceneObjectData {
   const geometry = (objMap.get("geometry") as string) ?? "box";
   const geometryKind =
-    (objMap.get("geometryKind") as "primitive" | "generated" | undefined) ??
+    (objMap.get("geometryKind") as SceneObjectData["geometryKind"] | undefined) ??
     "primitive";
 
   return {
@@ -36,6 +88,9 @@ function readObjectDataFromMap(objMap: Y.Map<unknown>): SceneObjectData {
     sz: (objMap.get("sz") as number) ?? 1,
     materialColor: (objMap.get("materialColor") as string) ?? "#ffffff",
     parentId: (objMap.get("parentId") as string | undefined) ?? undefined,
+    partRole: (objMap.get("partRole") as string | undefined) ?? undefined,
+    relationshipPrompt:
+      (objMap.get("relationshipPrompt") as string | undefined) ?? undefined,
     localBounds:
       (objMap.get("localBounds") as SceneObjectData["localBounds"]) ??
       (geometryKind === "primitive"
@@ -83,6 +138,12 @@ export function useYjsObject(objectId: string) {
           for (const [key, value] of Object.entries(writeData)) {
             objMap.set(key, value);
           }
+          if (hasTransformData(writeData)) {
+            const objectsMap = sceneMap.get("objects") as
+              | Y.Map<Y.Map<unknown>>
+              | undefined;
+            if (objectsMap) updateRelationshipPrompt(objMap, objectsMap);
+          }
         }, "local-three");
       };
 
@@ -110,7 +171,7 @@ export function useYjsObject(objectId: string) {
         }, 66);
       }
     },
-    [doc, getObjectMap, connected]
+    [doc, getObjectMap, sceneMap, connected]
   );
 
   // Observe remote changes and apply to mesh via callback
@@ -184,12 +245,18 @@ export function useYjsObject(objectId: string) {
             for (const [key, value] of Object.entries(pendingData.current!)) {
               objMap.set(key, value);
             }
+            if (hasTransformData(pendingData.current!)) {
+              const objectsMap = sceneMap.get("objects") as
+                | Y.Map<Y.Map<unknown>>
+                | undefined;
+              if (objectsMap) updateRelationshipPrompt(objMap, objectsMap);
+            }
           }, "local-three");
         }
         pendingData.current = null;
       }
     };
-  }, [doc, getObjectMap, connected]);
+  }, [doc, getObjectMap, sceneMap, connected]);
 
   return {
     writeTransform,
@@ -417,6 +484,23 @@ export function useYjsAddGeneratedObject() {
       openscadCode: string,
       generatedPrompt: string,
       presetId?: string,
+      options: Partial<
+        Pick<
+          SceneObjectData,
+          | "parentId"
+          | "partRole"
+          | "relationshipPrompt"
+          | "px"
+          | "py"
+          | "pz"
+          | "rx"
+          | "ry"
+          | "rz"
+          | "sx"
+          | "sy"
+          | "sz"
+        >
+      > = {},
     ): string | null => {
       if (!connected) return null;
 
@@ -437,6 +521,7 @@ export function useYjsAddGeneratedObject() {
         dedupedName,
         openscadCode,
         generatedPrompt,
+        options,
       );
 
       doc.transact(() => {
@@ -445,6 +530,64 @@ export function useYjsAddGeneratedObject() {
           if (value !== undefined) objMap.set(key, value);
         }
         objectsMap.set(id, objMap);
+        updateRelationshipPrompt(objMap, objectsMap);
+      }, "local-three");
+
+      return id;
+    },
+    [connected, doc, sceneMap],
+  );
+}
+
+export function useYjsAddGroupObject() {
+  const { doc, sceneMap, connected } = useYjs();
+
+  return useCallback(
+    (
+      name: string,
+      presetId?: string,
+      options: Partial<
+        Pick<
+          SceneObjectData,
+          | "parentId"
+          | "partRole"
+          | "relationshipPrompt"
+          | "px"
+          | "py"
+          | "pz"
+          | "rx"
+          | "ry"
+          | "rz"
+          | "sx"
+          | "sy"
+          | "sz"
+        >
+      > = {},
+    ): string | null => {
+      if (!connected) return null;
+
+      const objectsMap = sceneMap.get("objects") as
+        | Y.Map<Y.Map<unknown>>
+        | undefined;
+      if (!objectsMap) return null;
+
+      const existingNames = new Set<string>();
+      objectsMap.forEach((objMap) => {
+        const currentName = objMap.get("name") as string | undefined;
+        if (currentName) existingNames.add(currentName);
+      });
+
+      const dedupedName = deduplicateName(name, existingNames);
+      const id = presetId ?? crypto.randomUUID();
+      const data = createGroupObject(dedupedName, options);
+
+      doc.transact(() => {
+        const objMap = new Y.Map<unknown>();
+        for (const [key, value] of Object.entries(data)) {
+          if (value !== undefined) objMap.set(key, value);
+        }
+        objectsMap.set(id, objMap);
+        updateRelationshipPrompt(objMap, objectsMap);
       }, "local-three");
 
       return id;
@@ -534,6 +677,7 @@ export function useYjsDuplicateObject() {
             }
           }
           objectsMap.set(newId, objMap);
+          updateRelationshipPrompt(objMap, objectsMap);
         }
       }, "local-three");
 
@@ -567,6 +711,7 @@ export function useYjsDeleteObject() {
             const worldTransform = decomposeMatrix(worldMat);
             objMap.delete("parentId");
             writeTransformToMap(objMap, worldTransform);
+            updateRelationshipPrompt(objMap, objectsMap, true);
           }
         });
         objectsMap.delete(objectId);
@@ -604,6 +749,9 @@ export function useYjsBatchWriteTransform() {
               for (const [key, value] of Object.entries(data)) {
                 objMap.set(key, value);
               }
+              if (hasTransformData(data)) {
+                updateRelationshipPrompt(objMap, objectsMap);
+              }
             }
           }, "local-three");
         }
@@ -628,6 +776,9 @@ export function useYjsBatchWriteTransform() {
             if (!objMap) continue;
             for (const [key, value] of Object.entries(objData)) {
               objMap.set(key, value);
+            }
+            if (hasTransformData(objData)) {
+              updateRelationshipPrompt(objMap, objectsMap);
             }
           }
         }, "local-three");
@@ -687,6 +838,7 @@ export function useYjsBatchDelete() {
             const worldTransform = decomposeMatrix(worldMat);
             objMap.delete("parentId");
             writeTransformToMap(objMap, worldTransform);
+            updateRelationshipPrompt(objMap, objectsMap, true);
           }
         });
         for (const id of objectIds) {
@@ -820,6 +972,7 @@ export function useYjsParentObject() {
           // Recalculate local transform so the object stays in the same world position
           const newLocal = worldToLocal(childWorldTransform, newParentWorld);
           writeTransformToMap(childMap, newLocal);
+          updateRelationshipPrompt(childMap, objectsMap, true);
         }
       }, "local-three");
     },
@@ -855,6 +1008,7 @@ export function useYjsUnparentObject() {
           // Remove parent — object becomes root, local == world
           objMap.delete("parentId");
           writeTransformToMap(objMap, worldTransform);
+          updateRelationshipPrompt(objMap, objectsMap, true);
         }
       }, "local-three");
     },

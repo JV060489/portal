@@ -9,6 +9,7 @@ import { useYjs } from "@/lib/yjs/provider";
 import {
   useYjsAddObject,
   useYjsAddGeneratedObject,
+  useYjsAddGroupObject,
   useYjsDeleteObject,
   useYjsRenameObject,
   useYjsDuplicateObject,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/yjs/hooks";
 import { SHAPES } from "@/lib/yjs/types";
 import { computeWorldBoundsMap } from "@/lib/scene/bounds";
+import { buildRelationshipPrompt } from "@/lib/scene/relationship-prompt";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,6 +113,48 @@ async function resizeReferenceImage(file: File): Promise<ReferenceImage> {
   return { dataUrl, mediaType: outputType, name: file.name };
 }
 
+function readRelationshipObject(objMap: Y.Map<unknown>) {
+  return {
+    name: objMap.get("name") as string | undefined,
+    partRole: objMap.get("partRole") as string | undefined,
+    parentId: objMap.get("parentId") as string | undefined,
+    px: (objMap.get("px") as number | undefined) ?? 0,
+    py: (objMap.get("py") as number | undefined) ?? 0,
+    pz: (objMap.get("pz") as number | undefined) ?? 0,
+    rx: (objMap.get("rx") as number | undefined) ?? 0,
+    ry: (objMap.get("ry") as number | undefined) ?? 0,
+    rz: (objMap.get("rz") as number | undefined) ?? 0,
+    sx: (objMap.get("sx") as number | undefined) ?? 1,
+    sy: (objMap.get("sy") as number | undefined) ?? 1,
+    sz: (objMap.get("sz") as number | undefined) ?? 1,
+  };
+}
+
+function updateRelationshipPrompt(
+  objMap: Y.Map<unknown>,
+  objectsMap: Y.Map<Y.Map<unknown>>,
+) {
+  if (
+    !objMap.get("parentId") &&
+    !objMap.get("partRole") &&
+    !objMap.get("relationshipPrompt")
+  ) {
+    return;
+  }
+
+  const object = readRelationshipObject(objMap);
+  const parentMap = object.parentId
+    ? objectsMap.get(object.parentId)
+    : undefined;
+  objMap.set(
+    "relationshipPrompt",
+    buildRelationshipPrompt(
+      object,
+      parentMap ? readRelationshipObject(parentMap) : undefined,
+    ),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // AiChatBox
 // ---------------------------------------------------------------------------
@@ -132,6 +176,7 @@ export function AiChatBox({
   const objects = useYjsObjects();
   const addObject = useYjsAddObject();
   const addGeneratedObject = useYjsAddGeneratedObject();
+  const addGroupObject = useYjsAddGroupObject();
   const deleteObject = useYjsDeleteObject();
   const renameObject = useYjsRenameObject();
   const duplicateObject = useYjsDuplicateObject();
@@ -220,7 +265,39 @@ export function AiChatBox({
           const openscadCode = args.openscadCode as string;
           const generatedPrompt =
             (args.generatedPrompt as string | undefined) ?? name;
-          addGeneratedObject(name, openscadCode, generatedPrompt, presetId);
+          addGeneratedObject(name, openscadCode, generatedPrompt, presetId, {
+            parentId: args.parentId as string | undefined,
+            partRole: args.partRole as string | undefined,
+            relationshipPrompt: args.relationshipPrompt as string | undefined,
+            px: args.px as number | undefined,
+            py: args.py as number | undefined,
+            pz: args.pz as number | undefined,
+            rx: args.rx as number | undefined,
+            ry: args.ry as number | undefined,
+            rz: args.rz as number | undefined,
+            sx: args.sx as number | undefined,
+            sy: args.sy as number | undefined,
+            sz: args.sz as number | undefined,
+          });
+          break;
+        }
+        case "create_group": {
+          const name = (args.name as string | undefined) ?? "Group";
+          const presetId = args.id as string | undefined;
+          addGroupObject(name, presetId, {
+            parentId: args.parentId as string | undefined,
+            partRole: args.partRole as string | undefined,
+            relationshipPrompt: args.relationshipPrompt as string | undefined,
+            px: args.px as number | undefined,
+            py: args.py as number | undefined,
+            pz: args.pz as number | undefined,
+            rx: args.rx as number | undefined,
+            ry: args.ry as number | undefined,
+            rz: args.rz as number | undefined,
+            sx: args.sx as number | undefined,
+            sy: args.sy as number | undefined,
+            sz: args.sz as number | undefined,
+          });
           break;
         }
         case "edit_openscad_object":
@@ -250,6 +327,15 @@ export function AiChatBox({
             objMap.set("sourceKind", "openscad");
             objMap.set("openscadCode", openscadCode);
             objMap.set("generatedPrompt", generatedPrompt);
+            if (typeof args.partRole === "string" && args.partRole.trim()) {
+              objMap.set("partRole", args.partRole.trim());
+            }
+            if (
+              typeof args.relationshipPrompt === "string" &&
+              args.relationshipPrompt.trim()
+            ) {
+              objMap.set("relationshipPrompt", args.relationshipPrompt.trim());
+            }
             objMap.set("geometryRevision", currentGeometryRevision + 1);
             objMap.set("boundsVersion", currentBoundsVersion + 1);
             objMap.set("compileStatus", "idle");
@@ -291,6 +377,14 @@ export function AiChatBox({
             for (const key of fields) {
               if (args[key] !== undefined) objMap.set(key, args[key]);
             }
+            if (
+              typeof args.relationshipPrompt === "string" &&
+              args.relationshipPrompt.trim()
+            ) {
+              objMap.set("relationshipPrompt", args.relationshipPrompt.trim());
+            } else if (objectsMap) {
+              updateRelationshipPrompt(objMap, objectsMap);
+            }
           }, "local-ai");
           break;
         }
@@ -320,6 +414,7 @@ export function AiChatBox({
       connected,
       addObject,
       addGeneratedObject,
+      addGroupObject,
       deleteObject,
       renameObject,
       duplicateObject,
@@ -448,6 +543,8 @@ export function AiChatBox({
               sy: o.sy,
               sz: o.sz,
               parentId: o.parentId,
+              partRole: o.partRole,
+              relationshipPrompt: o.relationshipPrompt,
               localBounds: o.localBounds,
               worldBounds: worldSummary?.bounds,
               worldAnchors: worldSummary?.anchors,

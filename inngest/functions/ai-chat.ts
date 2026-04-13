@@ -8,6 +8,7 @@ import {
   computeWorldBoundsMap,
   type WorldBoundsSummary,
 } from "@/lib/scene/bounds";
+import { buildRelationshipPrompt } from "@/lib/scene/relationship-prompt";
 import { prisma } from "@/lib/prisma";
 import type { LocalBounds } from "@/lib/yjs/types";
 
@@ -28,13 +29,17 @@ Rules:
 - Generated OpenSCAD objects are normalized after compile: their local origin is at the footprint's bottom center, local Y is up, and local Y=0 is the object's base.
 - For requests like "create X on the table", do not wait for the generated object's bounds. Generate it, then place it by setting px/pz to the target topCenter X/Z and py to the target topCenter Y.
 - If exact scale, clearance, stacking on top of the generated object, or alignment to the generated object's side depends on its final bounds, create it first and explain that a follow-up is needed after bounds appear.
+- Default to editable parts for OpenSCAD: if the requested object has multiple logical pieces, components, attachments, limbs, panels, handles, wheels, lids, buttons, holes/caps, or separable details, first create a group, then create each logical part as its own OpenSCAD child object with parentId, partRole, transform placement, and relationshipPrompt.
+- Use a single generated OpenSCAD object only when the requested shape is truly one continuous part, such as one vase body, one bracket plate, one knob, one gear, or one simple primitive-like solid.
+- For requests to select, delete, move, or edit a piece inside an existing monolithic OpenSCAD object, create a replacement group with child OpenSCAD parts, then delete the original monolithic object after the child parts have been created.
 - After mutations, confirm in one short sentence.`;
 
-const OPENSCAD_CODE_PROMPT = `You generate only valid OpenSCAD for a single 3D object.
+const OPENSCAD_CODE_PROMPT = `You generate only valid OpenSCAD for one standalone 3D object or one standalone child part.
 
 Rules:
 - Return only raw OpenSCAD code.
-- The model must be a single printable 3D object.
+- The model must be a single printable 3D object/part.
+- If this generation is for an editable child part, generate only that child part. Do not include the surrounding assembly, neighboring parts, scene transforms, or duplicate connector pieces that belong to other child parts.
 - Make the object useful as CAD, not just visually suggestive: include functional dimensions, clearances, thicknesses, hole sizes, spacing, support/contact surfaces, and manufacturable proportions when relevant.
 - Initialize and declare clear top-level parameters for important dimensions before modules/geometry. Never create parameters for color.
 - Author the model in OpenSCAD's native Z-up coordinate system.
@@ -50,6 +55,8 @@ Rules:
 - For vases, bottles, cups, lampshades, bowls, and other lathe-like objects, prefer one rotate_extrude() of a many-point smooth profile over stacking separate cylinders/cones. Use 12+ profile points for complex silhouettes and keep slope changes gradual unless the reference has a real edge.
 - Generate manifold, watertight solid geometry only.
 - Avoid infinitely thin walls, open surfaces, coplanar overlapping faces, self-intersections, non-positive dimensions, and boolean operations that merely touch at a face/edge/point.
+- Keep the output to the requested physical object or child part only. Do not add floating artifacts, loose blobs, stray spikes, accidental side attachments, shadow/reflection shapes, background objects, labels, watermarks, or image noise as geometry.
+- Unless the user explicitly asks for separate loose parts, every generated detail must be intentionally connected to the main object with positive overlap and a clear structural or decorative purpose.
 - Give shells, rims, plates, text, raised details, engraved details, connectors, and decorative features explicit positive thickness and real overlap with the main body.
 - For plates, brackets, mounts, gears, holders, adapters, and mechanical parts, prefer dimensioned CSG: start from a solid body, subtract holes/cutouts with difference(), use named parameters for hole diameter/count/spacing, and add fillets/chamfers/rounded corners where practical.
 - For requests with counts, patterns, symmetry, or holes, compute placements from parameters and loops. Do not eyeball or randomly scatter features.
@@ -95,6 +102,7 @@ Rules:
 - Do not output OpenSCAD code.
 - Do not include hidden chain-of-thought or private reasoning transcripts.
 - If a reference image is attached, inspect it as the concrete visual specification and describe the visible silhouette, proportions, and geometry-relevant details.
+- When a reference image is attached, identify the primary requested foreground object and ignore background, support surfaces, shadows, reflections, compression artifacts, watermarks, labels, and stray edge fragments.
 - Identify the best OpenSCAD construction strategy: main primitives, rotate_extrude or linear_extrude profiles, hull/minkowski usage, boolean operations, helper modules, and parameter names.
 - For functional/mechanical requests, identify concrete dimensions, hole counts, hole spacing, thicknesses, clearances, symmetry, loops, and which features should be subtracted with difference().
 - Call out printability constraints, wall thickness, real overlaps between connected parts, manifold geometry, centering, z=0 base placement, and smoothness requirements.
@@ -102,28 +110,37 @@ Rules:
 
 const OPENSCAD_REFERENCE_IMAGE_RULES = `Reference image rules:
 - The attached image is the shape authority. Do not create a generic instance of the named object.
+- Model only the requested primary physical object or explicitly requested child part. Treat the background, support surface, shadows, reflections, glare, cast silhouettes, watermarks, labels, compression noise, and stray edge fragments as non-geometry.
 - Match the visible silhouette first: height-to-width ratio, belly/shoulder height, neck length, lip flare, base taper, foot/base details, handles/spouts/cutouts.
+- Do not turn ambiguous pixels into physical details. Exclude floating specks, detached islands, accidental protrusions, halos, blobs, or side growths unless the user explicitly identifies them as real parts of the object.
+- Any included detail from the image must be physically plausible, intentionally connected to the main object with positive overlap, and useful to the object's form.
 - If the reference object has ceramic, glass, molded plastic, rounded, organic, or lathe-turned surfaces, generate smooth high-resolution curves that match the silhouette instead of stepped/faceted approximations.
 - Do not approximate a smooth reference image with horizontal bands, stacked frustums, or a visibly segmented body. Use a continuous curved/revolved profile when the source surface is continuous.
 - Model decorative surface geometry only when possible as shallow raised/engraved relief; ignore color-only changes that have no physical boundary.
 - If the user text and image disagree, follow the user's text for task intent and the image for the object's form.`;
 
 const SCENE_REFERENCE_IMAGE_RULES = `The current user message includes a reference image.
-Use it as visual context for generation requests. When you call generate_openscad_object for the referenced object, keep the prompt focused on the user's intent and explicitly mention that the attached reference image must be used for the object's visible form. Do not replace the reference with a generic object.`;
+Use it as visual context for generation requests. When you call generate_openscad_object for the referenced object, keep the prompt focused on the user's intent and explicitly mention that the attached reference image must be used for the object's visible form. Do not replace the reference with a generic object.
+Ignore background clutter, shadows, reflections, support surfaces, watermarks, labels, compression noise, stray edge fragments, and detached or accidental blobs unless the user explicitly asks to model them.`;
 
 const SELECTION_RULES = `Selection rules:
 - The user may have selected scene objects. Selection is focus context, not a hard lock.
 - The first selectedObjectId is the primary selected object.
 - If objects are selected and the user says "this", "it", "them", "selected", or asks for an ambiguous edit, target the selected objects.
 - For transform, rename, delete, duplicate, and color/material edits, use the existing scene edit tools on selected object IDs.
+- For selected OpenSCAD parts with parentId/partRole/relationshipPrompt, preserve their relationship context when moving or editing them.
 - For shape/form/detail edits to a selected object, call edit_openscad_object instead of generate_openscad_object.
 - For multi-selection shape edits, edit the primary selected object unless the user clearly identifies multiple selected targets. Ask a brief question if the target is still ambiguous.
-- If the user clearly asks to create/add/generate a new object, call generate_openscad_object. You may still use the selection for placement/reference.`;
+- If the user clearly asks to create/add/generate a new multi-piece object, use create_group plus one generate_openscad_object call per logical piece. You may still use the selection for placement/reference.
+- If the user asks to create/add/generate a truly single-piece object, call generate_openscad_object once.`;
 
 const OPENSCAD_WORKFLOW_RULES = `OpenSCAD workflow:
 - Treat generate_openscad_object and edit_openscad_object as planning-phase tools. They queue a later strict OpenSCAD generation phase.
 - In prompt/editPrompt, preserve the user's shape intent and include only concise geometry requirements the OpenSCAD generator needs.
 - For simple parameter-only changes on an existing OpenSCAD object, use update_openscad_parameters instead of regenerating the model.
+- When creating editable multi-part objects, call create_group once for the assembly and generate each part separately with generate_openscad_object using the group ID as parentId. Do not also generate a whole-object OpenSCAD monolith for the same assembly.
+- For each child part, set partRole to a short logical role and set px/py/pz/sx/sy/sz so the children are visibly separated and assembled under the group.
+- Keep each generated part's OpenSCAD code centered on its own footprint origin; place parts with scene transforms instead of embedding assembly offsets inside the part code.
 - Do not mention phases, tools, prompts, or internal implementation details to the user.`;
 
 const OPENSCAD_THINKING_MAX_OUTPUT_TOKENS = 500;
@@ -151,11 +168,14 @@ const OPENSCAD_CODE_PROVIDER_OPTIONS = {
 
 type SceneObject = {
   id: string;
+  type?: string;
   name: string;
   geometry: string;
-  geometryKind?: "primitive" | "generated";
+  geometryKind?: "primitive" | "generated" | "group";
   sourceKind?: "openscad";
   parentId?: string;
+  partRole?: string;
+  relationshipPrompt?: string;
   px?: number;
   py?: number;
   pz?: number;
@@ -260,6 +280,26 @@ function refreshSceneBoundsContext(liveScene: SceneObject[]) {
   }
 }
 
+function updateRelationshipPromptForObject(
+  object: SceneObject,
+  liveScene: SceneObject[],
+  force = false,
+) {
+  if (
+    !force &&
+    !object.parentId &&
+    !object.partRole &&
+    !object.relationshipPrompt
+  ) {
+    return;
+  }
+
+  const parent = object.parentId
+    ? liveScene.find((candidate) => candidate.id === object.parentId)
+    : undefined;
+  object.relationshipPrompt = buildRelationshipPrompt(object, parent);
+}
+
 function getReferenceImageBytes(referenceImage: ReferenceImage): Uint8Array {
   const base64Payload = referenceImage.dataUrl.split(",")[1];
   if (!base64Payload) {
@@ -296,6 +336,9 @@ function buildSelectionContext(
       geometry: object.geometry,
       geometryKind: object.geometryKind,
       sourceKind: object.sourceKind,
+      parentId: object.parentId,
+      partRole: object.partRole,
+      relationshipPrompt: object.relationshipPrompt,
       materialColor: object.materialColor,
       px: object.px,
       py: object.py,
@@ -561,7 +604,30 @@ function buildOpenScadUserPrompt(
 
   return `${prompt}
 
-Use the attached reference image as the concrete visual specification for the object's visible form. Match that image; do not create a generic version of the requested noun.`;
+Use the attached reference image as the concrete visual specification for the object's visible form. Match the primary requested object; do not create a generic version of the requested noun.
+Ignore background clutter, shadows, reflections, support surfaces, watermarks, labels, compression noise, stray edge fragments, floating specks, detached islands, accidental blobs, halos, and ambiguous side protrusions unless the user explicitly says they are part of the object.`;
+}
+
+function buildOpenScadPartPrompt({
+  prompt,
+  partRole,
+  parentId,
+}: {
+  prompt: string;
+  partRole?: string;
+  parentId?: string;
+}): string {
+  if (!partRole && !parentId) return prompt;
+
+  return `Generate only one editable child part for a multi-part scene assembly.
+
+Part role: ${partRole ?? "child part"}
+Assembly parent ID: ${parentId ?? "unknown"}
+
+Part requirements:
+${prompt}
+
+Return a standalone OpenSCAD model for only this part. Keep it centered on its own footprint origin with its base on z=0. Do not include the whole assembly or neighboring parts; placement in the assembly is handled by the scene transform.`;
 }
 
 function buildOpenScadEditPrompt({
@@ -594,7 +660,10 @@ ${JSON.stringify(
     name: target.name,
     geometry: target.geometry,
     geometryKind: target.geometryKind,
+    parentId: target.parentId,
+    partRole: target.partRole,
     generatedPrompt: target.generatedPrompt,
+    relationshipPrompt: target.relationshipPrompt,
     localBounds: target.localBounds,
     worldBounds: target.worldBounds,
     compileStatus: target.compileStatus,
@@ -643,7 +712,7 @@ function attachReferenceImageToLatestUserMessage(
         type: "text",
         text: `${String(lastUserMessage.content)}
 
-Attached reference image: use this image as visual context for the requested object.`,
+Attached reference image: use this image as visual context for the requested object. Ignore background clutter, shadows, reflections, labels, noise, and stray fragments.`,
       },
       {
         type: "image",
@@ -794,24 +863,150 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
               objects: buildSelectedObjects(liveScene, selectedObjectIds),
             }),
           }),
+          create_group: tool({
+            description:
+              "Create a non-rendered scene group/assembly container. Use this before generating separate editable OpenSCAD child parts for one logical multi-part object.",
+            inputSchema: jsonSchema({
+              type: "object" as const,
+              properties: {
+                name: { type: "string" },
+                parentId: { type: "string" },
+                partRole: { type: "string" },
+                relationshipPrompt: { type: "string" },
+                px: { type: "number" },
+                py: { type: "number" },
+                pz: { type: "number" },
+                rx: { type: "number" },
+                ry: { type: "number" },
+                rz: { type: "number" },
+                sx: { type: "number" },
+                sy: { type: "number" },
+                sz: { type: "number" },
+              },
+              required: ["name"],
+            }),
+            execute: async (input) => {
+              const payload = input as {
+                name: string;
+                parentId?: string;
+                partRole?: string;
+                relationshipPrompt?: string;
+                px?: number;
+                py?: number;
+                pz?: number;
+                rx?: number;
+                ry?: number;
+                rz?: number;
+                sx?: number;
+                sy?: number;
+                sz?: number;
+              };
+              const id = crypto.randomUUID();
+              const group: SceneObject = {
+                id,
+                type: "group",
+                geometry: "group",
+                geometryKind: "group",
+                name: payload.name,
+                parentId: payload.parentId,
+                partRole: payload.partRole,
+                relationshipPrompt: payload.relationshipPrompt,
+                px: payload.px ?? 0,
+                py: payload.py ?? 0,
+                pz: payload.pz ?? 0,
+                rx: payload.rx ?? 0,
+                ry: payload.ry ?? 0,
+                rz: payload.rz ?? 0,
+                sx: payload.sx ?? 1,
+                sy: payload.sy ?? 1,
+                sz: payload.sz ?? 1,
+              };
+              liveScene.push(group);
+              updateRelationshipPromptForObject(group, liveScene);
+              refreshSceneBoundsContext(liveScene);
+              return {
+                ok: true,
+                id,
+                name: group.name,
+                geometry: "group",
+                geometryKind: "group",
+                parentId: group.parentId,
+                partRole: group.partRole,
+                relationshipPrompt: group.relationshipPrompt,
+                px: group.px,
+                py: group.py,
+                pz: group.pz,
+                rx: group.rx,
+                ry: group.ry,
+                rz: group.rz,
+                sx: group.sx,
+                sy: group.sy,
+                sz: group.sz,
+              };
+            },
+          }),
           generate_openscad_object: tool({
             description:
-              "Generate a new OpenSCAD-backed object for the scene. Use this when the user asks to create a model or part.",
+              "Generate a new OpenSCAD-backed object for the scene. Use this when the user asks to create a model or an editable child part of a multi-part model.",
             inputSchema: jsonSchema({
               type: "object" as const,
               properties: {
                 prompt: { type: "string" },
                 name: { type: "string" },
+                parentId: { type: "string" },
+                partRole: { type: "string" },
+                relationshipPrompt: { type: "string" },
+                px: { type: "number" },
+                py: { type: "number" },
+                pz: { type: "number" },
+                rx: { type: "number" },
+                ry: { type: "number" },
+                rz: { type: "number" },
+                sx: { type: "number" },
+                sy: { type: "number" },
+                sz: { type: "number" },
               },
               required: ["prompt"],
             }),
             execute: async (input, { toolCallId }) => {
-              const { prompt, name } = input as {
+              const {
+                prompt,
+                name,
+                parentId,
+                partRole,
+                relationshipPrompt,
+                px,
+                py,
+                pz,
+                rx,
+                ry,
+                rz,
+                sx,
+                sy,
+                sz,
+              } = input as {
                 prompt: string;
                 name?: string;
+                parentId?: string;
+                partRole?: string;
+                relationshipPrompt?: string;
+                px?: number;
+                py?: number;
+                pz?: number;
+                rx?: number;
+                ry?: number;
+                rz?: number;
+                sx?: number;
+                sy?: number;
+                sz?: number;
               };
-              const codePrompt = buildOpenScadUserPrompt(
+              const partScopedPrompt = buildOpenScadPartPrompt({
                 prompt,
+                partRole,
+                parentId,
+              });
+              const codePrompt = buildOpenScadUserPrompt(
+                partScopedPrompt,
                 referenceImage,
               );
               const generatedPrompt = buildGeneratedPromptForStorage(
@@ -835,18 +1030,25 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 geometryKind: "generated",
                 sourceKind: "openscad",
                 name: resolvedName,
-                px: 0,
-                py: 0,
-                pz: 0,
-                rx: 0,
-                ry: 0,
-                rz: 0,
-                sx: 1,
-                sy: 1,
-                sz: 1,
+                parentId,
+                partRole,
+                relationshipPrompt,
+                px: px ?? 0,
+                py: py ?? 0,
+                pz: pz ?? 0,
+                rx: rx ?? 0,
+                ry: ry ?? 0,
+                rz: rz ?? 0,
+                sx: sx ?? 1,
+                sy: sy ?? 1,
+                sz: sz ?? 1,
                 localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
                 generatedPrompt,
               });
+              const createdObject = liveScene.find((object) => object.id === id);
+              if (createdObject) {
+                updateRelationshipPromptForObject(createdObject, liveScene);
+              }
               refreshSceneBoundsContext(liveScene);
               return {
                 ok: true,
@@ -855,6 +1057,18 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 geometry: "generated",
                 geometryKind: "generated",
                 sourceKind: "openscad",
+                parentId,
+                partRole,
+                relationshipPrompt: createdObject?.relationshipPrompt,
+                px: px ?? 0,
+                py: py ?? 0,
+                pz: pz ?? 0,
+                rx: rx ?? 0,
+                ry: ry ?? 0,
+                rz: rz ?? 0,
+                sx: sx ?? 1,
+                sy: sy ?? 1,
+                sz: sz ?? 1,
                 generatedPrompt,
               };
             },
@@ -875,14 +1089,25 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                   type: "string",
                   description: "Optional new object name.",
                 },
+                partRole: {
+                  type: "string",
+                  description: "Optional logical part role for editable parts.",
+                },
+                relationshipPrompt: {
+                  type: "string",
+                  description:
+                    "Optional position relationship context for future edits.",
+                },
               },
               required: ["objectId", "editPrompt"],
             }),
             execute: async (input, { toolCallId }) => {
-              const { objectId, editPrompt, name } = input as {
+              const { objectId, editPrompt, name, partRole, relationshipPrompt } = input as {
                 objectId: string;
                 editPrompt: string;
                 name?: string;
+                partRole?: string;
+                relationshipPrompt?: string;
               };
               const target = liveScene.find((object) => object.id === objectId);
               if (!target) {
@@ -914,9 +1139,13 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 geometry: "generated",
                 geometryKind: "generated" as const,
                 sourceKind: "openscad" as const,
+                partRole: partRole ?? target.partRole,
+                relationshipPrompt:
+                  relationshipPrompt ?? target.relationshipPrompt,
                 generatedPrompt,
                 localBounds: GENERATED_OBJECT_BOUNDS_ESTIMATE,
               });
+              updateRelationshipPromptForObject(target, liveScene);
               refreshSceneBoundsContext(liveScene);
 
               return {
@@ -926,6 +1155,8 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 geometry: "generated",
                 geometryKind: "generated",
                 sourceKind: "openscad",
+                partRole: target.partRole,
+                relationshipPrompt: target.relationshipPrompt,
                 generatedPrompt,
               };
             },
@@ -1049,6 +1280,11 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 sx: { type: "number" },
                 sy: { type: "number" },
                 sz: { type: "number" },
+                relationshipPrompt: {
+                  type: "string",
+                  description:
+                    "Optional detailed logical description of the object's new position relative to its parent/assembly.",
+                },
               },
               required: ["objectId"],
             }),
@@ -1059,8 +1295,15 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
               if (target) {
                 Object.assign(target, payload);
                 refreshSceneBoundsContext(liveScene);
+                if (typeof payload.relationshipPrompt !== "string") {
+                  updateRelationshipPromptForObject(target, liveScene);
+                }
               }
-              return { ok: true, ...payload };
+              return {
+                ok: true,
+                ...payload,
+                relationshipPrompt: target?.relationshipPrompt,
+              };
             },
           }),
           change_color: tool({
@@ -1141,25 +1384,25 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
             string,
             unknown
           >;
+          const result = s.toolResults?.find(
+            (tr) => tr.toolCallId === tc.toolCallId,
+          );
+          const output = result
+            ? (result as unknown as { output: Record<string, unknown> }).output
+            : {};
+
           if (
             tc.toolName === "generate_openscad_object" ||
             tc.toolName === "edit_openscad_object" ||
             tc.toolName === "update_openscad_parameters"
           ) {
-            const result = s.toolResults?.find(
-              (tr) => tr.toolCallId === tc.toolCallId,
-            );
-            const output = result
-              ? (result as unknown as { output: Record<string, unknown> })
-                  .output
-              : {};
             writeCalls.push({
               toolCallId: tc.toolCallId,
               toolName: tc.toolName,
               args: { ...input, ...output },
             });
           } else {
-            writeCalls.push({ toolName: tc.toolName, args: input });
+            writeCalls.push({ toolName: tc.toolName, args: { ...input, ...output } });
           }
         }
       }

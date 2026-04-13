@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 import { useRenameScene } from "@/features/projects/hooks/use-projects";
 import { useOpenScadPreview } from "@/lib/openscad/use-openscad-preview";
 import { sanitizeLocalBounds } from "@/lib/scene/bounds";
+import { buildRelationshipPrompt } from "@/lib/scene/relationship-prompt";
 
 
 // ---------------------------------------------------------------------------
@@ -167,6 +168,48 @@ function getGroupBoundsCenter(group: THREE.Group, target: THREE.Vector3) {
   }
 
   box.getCenter(target);
+}
+
+function readRelationshipObject(objMap: Y.Map<unknown>) {
+  return {
+    name: objMap.get("name") as string | undefined,
+    partRole: objMap.get("partRole") as string | undefined,
+    parentId: objMap.get("parentId") as string | undefined,
+    px: (objMap.get("px") as number | undefined) ?? 0,
+    py: (objMap.get("py") as number | undefined) ?? 0,
+    pz: (objMap.get("pz") as number | undefined) ?? 0,
+    rx: (objMap.get("rx") as number | undefined) ?? 0,
+    ry: (objMap.get("ry") as number | undefined) ?? 0,
+    rz: (objMap.get("rz") as number | undefined) ?? 0,
+    sx: (objMap.get("sx") as number | undefined) ?? 1,
+    sy: (objMap.get("sy") as number | undefined) ?? 1,
+    sz: (objMap.get("sz") as number | undefined) ?? 1,
+  };
+}
+
+function updateRelationshipPrompt(
+  objMap: Y.Map<unknown>,
+  objectsMap: Y.Map<Y.Map<unknown>>,
+) {
+  if (
+    !objMap.get("parentId") &&
+    !objMap.get("partRole") &&
+    !objMap.get("relationshipPrompt")
+  ) {
+    return;
+  }
+
+  const object = readRelationshipObject(objMap);
+  const parentMap = object.parentId
+    ? objectsMap.get(object.parentId)
+    : undefined;
+  objMap.set(
+    "relationshipPrompt",
+    buildRelationshipPrompt(
+      object,
+      parentMap ? readRelationshipObject(parentMap) : undefined,
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +365,9 @@ function SceneMesh({
 
 function isCanvasReadyObject(object: SceneObjectData | undefined | null) {
   return (
-    object?.geometryKind !== "generated" || object.compileStatus === "ready"
+    object?.geometryKind === "group" ||
+    object?.geometryKind !== "generated" ||
+    object.compileStatus === "ready"
   );
 }
 
@@ -449,8 +494,11 @@ function SceneObject({
   const [generatedPreviewStatus, setGeneratedPreviewStatus] = useState<
     "idle" | "compiling" | "ready" | "error"
   >("idle");
+  const isGroup = objectData?.geometryKind === "group";
   const isCanvasReady =
-    objectData?.geometryKind === "generated"
+    isGroup
+      ? true
+      : objectData?.geometryKind === "generated"
       ? generatedPreviewStatus === "ready"
       : isCanvasReadyObject(objectData);
   const guardedRaycast = useCallback(
@@ -539,33 +587,35 @@ function SceneObject({
   return (
     <group ref={setGroupRef}>
       {/* The actual mesh — at identity transform within the group */}
-      <mesh
-        ref={meshRef}
-        visible={isCanvasReady}
-        raycast={guardedRaycast}
-        onClick={(e) => {
-          if (!isCanvasReady) return;
-          e.stopPropagation();
-          onSelect(objectId, {
-            shiftKey: e.shiftKey,
-            ctrlKey: e.ctrlKey || e.metaKey,
-          });
-        }}
-      >
-        {objectData ? (
-          <SceneMesh
-            objectId={objectId}
-            objectData={objectData}
-            onGeneratedStatusChange={setGeneratedPreviewStatus}
-          />
-        ) : (
-          <ObjectGeometry geometry="box" />
-        )}
-        <meshStandardMaterial color={materialColor} />
-        {isSelected && isCanvasReady && (
-          <SelectedObjectOutline meshRef={meshRef} isPrimary={isPrimary} />
-        )}
-      </mesh>
+      {!isGroup && (
+        <mesh
+          ref={meshRef}
+          visible={isCanvasReady}
+          raycast={guardedRaycast}
+          onClick={(e) => {
+            if (!isCanvasReady) return;
+            e.stopPropagation();
+            onSelect(objectId, {
+              shiftKey: e.shiftKey,
+              ctrlKey: e.ctrlKey || e.metaKey,
+            });
+          }}
+        >
+          {objectData ? (
+            <SceneMesh
+              objectId={objectId}
+              objectData={objectData}
+              onGeneratedStatusChange={setGeneratedPreviewStatus}
+            />
+          ) : (
+            <ObjectGeometry geometry="box" />
+          )}
+          <meshStandardMaterial color={materialColor} />
+          {isSelected && isCanvasReady && (
+            <SelectedObjectOutline meshRef={meshRef} isPrimary={isPrimary} />
+          )}
+        </mesh>
+      )}
 
       {/* Children nested inside this group — they inherit parent transforms */}
       {childIds.map((childId) => (
@@ -1099,6 +1149,7 @@ function GroupTransformControls({
               objMap.set("sx", _localScale.x);
               objMap.set("sy", _localScale.y);
               objMap.set("sz", _localScale.z);
+              updateRelationshipPrompt(objMap, objectsMap);
             }
           }
         }, "local-three");
