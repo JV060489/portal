@@ -41,12 +41,7 @@ type ReferenceImage = {
   name?: string;
 };
 
-const MODELS = [
-  { id: "gpt-5.4", label: "GPT-5.4" },
-  { id: "gpt-5-nano", label: "GPT-5 Nano" },
-  { id: "gpt-5.4-nano", label: "GPT-5.4 Nano" },
-  { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-] as const;
+const PORTAL_AI_MODEL = "gpt-5.4";
 
 const IMAGE_ONLY_PROMPT =
   "Create an OpenSCAD object from the attached reference image.";
@@ -181,7 +176,6 @@ export function AiChatBox({
   const renameObject = useYjsRenameObject();
   const duplicateObject = useYjsDuplicateObject();
 
-  const [selectedModel, setSelectedModel] = useState("gpt-5.4");
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [referenceImage, setReferenceImage] = useState<ReferenceImage | null>(
@@ -520,7 +514,7 @@ export function AiChatBox({
             role: message.role,
             content: message.content,
           })),
-          model: selectedModel,
+          model: PORTAL_AI_MODEL,
           ...(submittedReferenceImage && {
             referenceImage: submittedReferenceImage,
           }),
@@ -643,18 +637,9 @@ export function AiChatBox({
           )}
         </div>
         {!collapsed && (
-          <select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            disabled={isLoading}
-            className="text-xs bg-neutral-800 border border-white/10 rounded px-2 py-1 text-neutral-300 focus:outline-none focus:border-white/30 disabled:opacity-50"
-          >
-            {MODELS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+          <span className="text-xs bg-neutral-800 border border-white/10 rounded px-2 py-1 text-neutral-300">
+            Portal AI
+          </span>
         )}
       </div>
 
@@ -811,7 +796,7 @@ export function AiChatBox({
                     ? "AI is responding..."
                     : referenceImage
                       ? "Describe what to model from the image..."
-                      : "Ask AI to generate or edit the scene..."
+                      : "Generate or edit CAD models..."
                 }
                 className="flex-1 resize-none overflow-hidden bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
                 style={{ minHeight: "2.25rem", maxHeight: "10rem" }}
