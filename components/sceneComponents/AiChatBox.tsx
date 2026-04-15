@@ -606,7 +606,7 @@ export function AiChatBox({
   // ---------------------------------------------------------------------------
 
   return (
-    <div className="h-full w-full bg-card border-l border-border flex flex-col">
+    <div className="h-full min-h-0 w-full bg-card border-l border-border flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
         <div className="flex items-center gap-1">
@@ -653,7 +653,7 @@ export function AiChatBox({
           )}
 
           {/* Messages — fills remaining space */}
-          <div className="flex-1 min-h-0 flex flex-col gap-2 px-3 py-2 overflow-y-auto">
+          <div className="scrollbar-subtle flex-1 min-h-0 min-w-0 flex flex-col gap-2 px-3 py-2 overflow-y-auto overscroll-contain">
             {messages.length === 0 && !isLoading && (
               <p className="text-xs text-neutral-600 py-2 text-center">
                 Ask me to generate models, move them, rename them, or recolor them.
@@ -665,7 +665,7 @@ export function AiChatBox({
                 className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-lg px-3 py-1.5 text-xs leading-relaxed ${
+                  className={`min-w-0 max-w-[85%] overflow-hidden whitespace-pre-wrap break-words rounded-lg px-3 py-1.5 text-xs leading-relaxed ${
                     msg.role === "user"
                       ? "bg-neutral-700 text-neutral-100"
                       : "bg-neutral-800 text-neutral-200"
@@ -798,7 +798,7 @@ export function AiChatBox({
                       ? "Describe what to model from the image..."
                       : "Generate or edit CAD models..."
                 }
-                className="flex-1 resize-none overflow-hidden bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
+                className="scrollbar-subtle flex-1 resize-none overflow-y-auto overscroll-contain bg-neutral-800 border border-white/10 rounded-lg px-3 py-2 text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-white/30 disabled:opacity-50 leading-relaxed"
                 style={{ minHeight: "2.25rem", maxHeight: "10rem" }}
               />
               <button
