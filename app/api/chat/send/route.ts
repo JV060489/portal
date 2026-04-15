@@ -3,6 +3,9 @@ import { headers } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { inngest } from "@/inngest/client";
 import { buildAiMessageLimitError, getAiMessageLimit } from "@/lib/ai/limits";
+import * as Sentry from "@sentry/nextjs";
+
+export const runtime = "nodejs";
 
 const ALLOWED_MODELS = ["gpt-5.4", "gpt-5-nano", "gpt-5.4-nano", "gpt-5.4-mini"];
 const ALLOWED_IMAGE_MEDIA_TYPES = ["image/png", "image/jpeg", "image/webp"];
@@ -13,6 +16,16 @@ type ReferenceImage = {
   mediaType: string;
   name?: string;
 };
+
+function getInngestDebugContext() {
+  return {
+    hasEventKey: Boolean(process.env.INNGEST_EVENT_KEY),
+    hasSigningKey: Boolean(process.env.INNGEST_SIGNING_KEY),
+    inngestDev: process.env.INNGEST_DEV ? "set" : "unset",
+    inngestEnv: process.env.INNGEST_ENV ?? null,
+    nodeEnv: process.env.NODE_ENV ?? null,
+  };
+}
 
 function parseSelectedObjectIds(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
@@ -121,18 +134,59 @@ export async function POST(req: Request) {
     data: { jobId, userId, status: "pending" },
   });
 
-  await inngest.send({
-    name: "ai/chat",
-    data: {
+  const inngestDebugContext = getInngestDebugContext();
+
+  try {
+    const sendResult = await inngest.send({
+      name: "ai/chat",
+      data: {
+        jobId,
+        messages,
+        model: selectedModel,
+        sceneContext,
+        userId,
+        selectedObjectIds,
+        ...(referenceImage && { referenceImage }),
+      },
+    });
+
+    console.info("[ai-chat] queued Inngest event", {
       jobId,
-      messages,
-      model: selectedModel,
-      sceneContext,
-      userId,
-      selectedObjectIds,
-      ...(referenceImage && { referenceImage }),
-    },
-  });
+      eventIds: sendResult.ids,
+    });
+    Sentry.captureMessage("AI chat Inngest event queued", {
+      level: "info",
+      tags: { area: "ai-chat", action: "inngest.send" },
+      extra: {
+        jobId,
+        userId,
+        eventIds: sendResult.ids,
+        inngest: inngestDebugContext,
+      },
+    });
+  } catch (error) {
+    console.error("[ai-chat] failed to queue Inngest event", {
+      jobId,
+      error,
+    });
+    Sentry.captureException(error, {
+      tags: { area: "ai-chat", action: "inngest.send" },
+      extra: { jobId, userId, inngest: inngestDebugContext },
+    });
+
+    await prisma.aiJobResult.update({
+      where: { jobId },
+      data: {
+        status: "error",
+        error: "Failed to queue AI job. Please try again.",
+      },
+    });
+
+    return Response.json(
+      { error: "Failed to queue AI job. Please try again." },
+      { status: 502 },
+    );
+  }
 
   return Response.json({ jobId });
 }

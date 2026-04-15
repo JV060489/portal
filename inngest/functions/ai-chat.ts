@@ -808,7 +808,10 @@ export const aiChatFunction = inngest.createFunction(
     triggers: [{ event: "ai/chat" }],
     onFailure: async ({ event, error }) => {
       const { jobId } = event.data.event.data as { jobId: string };
-      Sentry.captureException(error);
+      Sentry.captureException(error, {
+        tags: { area: "ai-chat", action: "inngest.function.failure" },
+        extra: { jobId },
+      });
       await prisma.aiJobResult.update({
         where: { jobId },
         data: {
@@ -836,6 +839,27 @@ export const aiChatFunction = inngest.createFunction(
       referenceImage?: ReferenceImage;
       selectedObjectIds?: string[];
     };
+
+    logger.info("AI chat Inngest function started", {
+      jobId,
+      userId,
+      messageCount: messages.length,
+      sceneObjectCount: sceneContext.length,
+      selectedObjectCount: selectedObjectIds.length,
+      referenceImagePresent: Boolean(referenceImage),
+    });
+    Sentry.captureMessage("AI chat Inngest function started", {
+      level: "info",
+      tags: { area: "ai-chat", action: "inngest.function.started" },
+      extra: {
+        jobId,
+        userId,
+        messageCount: messages.length,
+        sceneObjectCount: sceneContext.length,
+        selectedObjectCount: selectedObjectIds.length,
+        referenceImagePresent: Boolean(referenceImage),
+      },
+    });
 
     const thinkingResult = await step.run("think", async () => {
       const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -1596,6 +1620,18 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
           status: "done",
           toolCalls: result.writeCalls as unknown as Prisma.InputJsonValue,
           text: result.finalText,
+        },
+      });
+
+      Sentry.captureMessage("AI chat Inngest function completed", {
+        level: "info",
+        tags: { area: "ai-chat", action: "inngest.function.completed" },
+        extra: {
+          jobId,
+          userId,
+          totalSteps: result.totalSteps,
+          writeCallCount: result.writeCalls.length,
+          openScadGenerationCount: generatedOpenScad.length,
         },
       });
     });
