@@ -20,13 +20,14 @@ export default function SignInForm() {
     const email = formData.get("email") as string;
     const password = formData.get("password") as string;
 
-    const { error } = await signIn.email({ email, password });
+    const { error } = await signIn.email({ email, password, rememberMe: true });
 
     if (error) {
       return error.message ?? "Something went wrong";
     }
 
-    router.push("/projects");
+    router.replace("/projects");
+    router.refresh();
     return null;
   }, null);
 

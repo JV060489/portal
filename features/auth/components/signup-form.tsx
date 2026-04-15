@@ -28,7 +28,8 @@ export default function SignUpForm() {
       return error.message ?? "Something went wrong";
     }
 
-    router.push("/projects");
+    router.replace("/projects");
+    router.refresh();
     return null;
   }, null);
 
