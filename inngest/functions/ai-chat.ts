@@ -27,7 +27,7 @@ Rules:
 - Use worldAnchors.bottomCenter -> target worldAnchors.topCenter when placing one object on top of another.
 - To place an existing object anchor at a target point, move its origin by the same world-space delta from its current anchor to that target.
 - Generated OpenSCAD objects are imported into a meters-based scene: OpenSCAD numeric dimensions are treated as millimeters and converted with 1 OpenSCAD unit = 0.001 scene units. Their local origin is at the footprint's bottom center, local Y is up, and local Y=0 is the object's base.
-- For requests like "create X on the table", do not wait for the generated object's bounds. Generate it, then place it by setting px/pz to the target topCenter X/Z and py to the target topCenter Y.
+- generate_openscad_object always creates the object at scene origin (px=0, py=0, pz=0). For explicit placement requests, generate the object first, then call update_transform.
 - If exact scale, clearance, stacking on top of the generated object, or alignment to the generated object's side depends on its final bounds, create it first and explain that a follow-up is needed after bounds appear.
 - Default to editable parts for OpenSCAD: if the requested object has multiple logical pieces, components, attachments, limbs, panels, handles, wheels, lids, buttons, holes/caps, or separable details, first create a group, then create each logical part as its own OpenSCAD child object with parentId, partRole, transform placement, and relationshipPrompt.
 - Use a single generated OpenSCAD object only when the requested shape is truly one continuous part, such as one vase body, one bracket plate, one knob, one gear, or one simple primitive-like solid.
@@ -138,6 +138,7 @@ const SELECTION_RULES = `Selection rules:
 const OPENSCAD_WORKFLOW_RULES = `OpenSCAD workflow:
 - Treat generate_openscad_object and edit_openscad_object as planning-phase tools. They queue a later strict OpenSCAD generation phase.
 - In prompt/editPrompt, preserve the user's shape intent and include only concise geometry requirements the OpenSCAD generator needs.
+- For generate_openscad_object, set needsOpenScadThinking to false when the prompt is already a detailed implementation brief with construction strategy, parameter names, dimensions, primitives, boolean operations, or OpenSCAD-like instructions. Set it to true for vague, visual, or underspecified requests that need a separate modeling plan.
 - For simple parameter-only changes on an existing OpenSCAD object, use update_openscad_parameters instead of regenerating the model.
 - When creating editable multi-part objects, call create_group once for the assembly and generate each part separately with generate_openscad_object using the group ID as parentId. Do not also generate a whole-object OpenSCAD monolith for the same assembly.
 - For each child part, set partRole to a short logical role and set px/py/pz/sx/sy/sz so the children are visibly separated and assembled under the group.
@@ -148,6 +149,8 @@ const OPENSCAD_THINKING_MAX_OUTPUT_TOKENS = 500;
 const OPENSCAD_THINKING_MAX_COMPLETION_TOKENS = 1200;
 const OPENSCAD_CODE_MAX_OUTPUT_TOKENS = 6000;
 const OPENSCAD_CODE_MAX_COMPLETION_TOKENS = 8000;
+const ACTION_PLANNING_MODEL = "gpt-5.4-mini";
+const OPENSCAD_MODEL = "gpt-5.4";
 
 const OPENSCAD_THINKING_PROVIDER_OPTIONS = {
   openai: {
@@ -223,6 +226,7 @@ type OpenScadGenerationTask =
       prompt: string;
       codePrompt: string;
       generatedPrompt: string;
+      needsOpenScadThinking: boolean;
     }
   | {
       toolCallId: string;
@@ -385,6 +389,40 @@ function buildFallbackOpenScadBrief(task: OpenScadGenerationTask): string {
   return `${taskText}
 
 Use the user request as the source of truth. Build a compact, parameterized, manifold OpenSCAD object centered on the footprint origin with its base on z=0. Prefer simple reliable CSG, real overlapping connections, positive wall/detail thickness, and smooth high-$fn curves where the requested form has round features. If a reference image is attached, match its visible proportions and silhouette.`;
+}
+
+function isDetailedOpenScadPrompt(prompt: string): boolean {
+  const text = prompt.toLowerCase();
+  const detailSignals = [
+    "implementation brief",
+    "recommended construction",
+    "suggested parameters",
+    "parameter",
+    "linear_extrude",
+    "rotate_extrude",
+    "difference",
+    "union",
+    "module",
+    "$fn",
+    "radius",
+    "diameter",
+    "thickness",
+    "bore",
+    "tooth_count",
+    "pitch_radius",
+    "dedendum",
+    "addendum",
+    "polygon",
+    "loop",
+    "extrude",
+  ];
+
+  return detailSignals.filter((signal) => text.includes(signal)).length >= 3;
+}
+
+function shouldRunOpenScadThinking(task: OpenScadGenerationTask): boolean {
+  if (task.toolName !== "generate_openscad_object") return true;
+  return task.needsOpenScadThinking && !isDetailedOpenScadPrompt(task.prompt);
 }
 
 function stripOpenScadFences(code: string): string {
@@ -820,7 +858,7 @@ export const aiChatFunction = inngest.createFunction(
       const pendingOpenScadGenerations: OpenScadGenerationTask[] = [];
 
       const aiResult = await generateText({
-        model: provider(model),
+        model: provider(ACTION_PLANNING_MODEL),
         system: `${SYSTEM_PROMPT}
 
 ${SELECTION_RULES}
@@ -874,9 +912,6 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 parentId: { type: "string" },
                 partRole: { type: "string" },
                 relationshipPrompt: { type: "string" },
-                px: { type: "number" },
-                py: { type: "number" },
-                pz: { type: "number" },
                 rx: { type: "number" },
                 ry: { type: "number" },
                 rz: { type: "number" },
@@ -957,6 +992,11 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 parentId: { type: "string" },
                 partRole: { type: "string" },
                 relationshipPrompt: { type: "string" },
+                needsOpenScadThinking: {
+                  type: "boolean",
+                  description:
+                    "False when prompt is already a detailed implementation/spec brief; true for vague requests that need an extra modeling plan.",
+                },
                 px: { type: "number" },
                 py: { type: "number" },
                 pz: { type: "number" },
@@ -976,9 +1016,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 parentId,
                 partRole,
                 relationshipPrompt,
-                px,
-                py,
-                pz,
+                needsOpenScadThinking,
                 rx,
                 ry,
                 rz,
@@ -991,9 +1029,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 parentId?: string;
                 partRole?: string;
                 relationshipPrompt?: string;
-                px?: number;
-                py?: number;
-                pz?: number;
+                needsOpenScadThinking?: boolean;
                 rx?: number;
                 ry?: number;
                 rz?: number;
@@ -1024,6 +1060,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 prompt,
                 codePrompt,
                 generatedPrompt,
+                needsOpenScadThinking: needsOpenScadThinking ?? true,
               });
               liveScene.push({
                 id,
@@ -1034,9 +1071,9 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 parentId,
                 partRole,
                 relationshipPrompt,
-                px: px ?? 0,
-                py: py ?? 0,
-                pz: pz ?? 0,
+                px: 0,
+                py: 0,
+                pz: 0,
                 rx: rx ?? 0,
                 ry: ry ?? 0,
                 rz: rz ?? 0,
@@ -1061,9 +1098,10 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
                 parentId,
                 partRole,
                 relationshipPrompt: createdObject?.relationshipPrompt,
-                px: px ?? 0,
-                py: py ?? 0,
-                pz: pz ?? 0,
+                needsOpenScadThinking: needsOpenScadThinking ?? true,
+                px: 0,
+                py: 0,
+                pz: 0,
                 rx: rx ?? 0,
                 ry: ry ?? 0,
                 rz: rz ?? 0,
@@ -1410,6 +1448,8 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
 
       return {
         model,
+        actionPlanningModel: ACTION_PLANNING_MODEL,
+        openScadModel: OPENSCAD_MODEL,
         userId,
         jobId,
         referenceImage: {
@@ -1435,8 +1475,16 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
       const provider = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
       return Promise.all(
         thinkingResult.pendingOpenScadGenerations.map(async (task) => {
+          if (!shouldRunOpenScadThinking(task)) {
+            return {
+              toolCallId: task.toolCallId,
+              brief: buildFallbackOpenScadBrief(task),
+              usedFallback: true,
+            };
+          }
+
           const brief = await thinkThroughOpenScadGeneration(
-            model,
+            OPENSCAD_MODEL,
             provider,
             task.codePrompt,
             referenceImage,
@@ -1468,7 +1516,7 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
           }
 
           const openscadCode = await generateOpenScadCode(
-            model,
+            OPENSCAD_MODEL,
             provider,
             task.codePrompt,
             thinking.brief,
@@ -1501,6 +1549,8 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
       logger.info("AI generation complete", {
         jobId,
         model,
+        actionPlanningModel: result.actionPlanningModel,
+        openScadModel: result.openScadModel,
         userId,
         totalSteps: result.totalSteps,
         writeCallCount: result.writeCalls.length,
@@ -1531,7 +1581,13 @@ ${SCENE_REFERENCE_IMAGE_RULES}` : ""}`,
 
       Sentry.addBreadcrumb({
         message: `AI job complete: ${jobId}`,
-        data: { model, userId, toolCalls: result.writeCalls.length },
+        data: {
+          model,
+          actionPlanningModel: result.actionPlanningModel,
+          openScadModel: result.openScadModel,
+          userId,
+          toolCalls: result.writeCalls.length,
+        },
       });
 
       await prisma.aiJobResult.update({

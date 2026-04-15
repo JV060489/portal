@@ -38,6 +38,54 @@ function buildTreeData(objects: SceneObjectInfo[]): SceneTreeNode[] {
   return roots;
 }
 
+function isReadyForTree(object: SceneObjectInfo) {
+  return (
+    object.geometryKind !== "generated" ||
+    object.compileStatus === "ready" ||
+    object.compileStatus === "error"
+  );
+}
+
+function getCompiledTreeObjects(objects: SceneObjectInfo[]) {
+  const objectMap = new Map(objects.map((object) => [object.id, object]));
+  const childIdsByParentId = new Map<string, string[]>();
+
+  for (const object of objects) {
+    if (!object.parentId) continue;
+
+    const childIds = childIdsByParentId.get(object.parentId) ?? [];
+    childIds.push(object.id);
+    childIdsByParentId.set(object.parentId, childIds);
+  }
+
+  const includeIds = new Set<string>();
+
+  const includeWithAncestors = (object: SceneObjectInfo) => {
+    let current: SceneObjectInfo | undefined = object;
+    while (current && !includeIds.has(current.id)) {
+      includeIds.add(current.id);
+      current = current.parentId ? objectMap.get(current.parentId) : undefined;
+    }
+  };
+
+  for (const object of objects) {
+    if (isReadyForTree(object)) {
+      includeWithAncestors(object);
+    }
+  }
+
+  for (const object of objects) {
+    if (
+      object.geometryKind === "group" &&
+      !childIdsByParentId.get(object.id)?.some((childId) => includeIds.has(childId))
+    ) {
+      includeIds.delete(object.id);
+    }
+  }
+
+  return objects.filter((object) => includeIds.has(object.id));
+}
+
 // ---------------------------------------------------------------------------
 // Recursive tree renderer — no react-arborist dependency
 // ---------------------------------------------------------------------------
@@ -150,16 +198,23 @@ export default function SceneObjectTree({
   const parentObject = useYjsParentObject();
   const unparentObject = useYjsUnparentObject();
 
-  const treeData = useMemo(() => buildTreeData(objects), [objects]);
+  const compiledTreeObjects = useMemo(
+    () => getCompiledTreeObjects(objects),
+    [objects],
+  );
+  const treeData = useMemo(
+    () => buildTreeData(compiledTreeObjects),
+    [compiledTreeObjects],
+  );
 
   // Auto-open parent nodes when new objects are added
   const allParentIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const obj of objects) {
+    for (const obj of compiledTreeObjects) {
       if (obj.parentId) ids.add(obj.parentId);
     }
     return ids;
-  }, [objects]);
+  }, [compiledTreeObjects]);
 
   // Ensure all parent nodes are open by default when they gain children
   const effectiveOpenIds = useMemo(() => {

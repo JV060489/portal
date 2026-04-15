@@ -35,6 +35,11 @@ type ToolCall = {
   args: Record<string, unknown>;
 };
 
+type PendingAssistantResponse = {
+  text: string;
+  generatedObjectIds: string[];
+};
+
 type ReferenceImage = {
   dataUrl: string;
   mediaType: "image/png" | "image/jpeg" | "image/webp";
@@ -45,6 +50,21 @@ const PORTAL_AI_MODEL = "gpt-5.4";
 
 const IMAGE_ONLY_PROMPT =
   "Create an OpenSCAD object from the attached reference image.";
+
+function getLoadingMessage(elapsedSeconds: number, jobId: string | null) {
+  if (!jobId) return "Sending request...";
+  if (elapsedSeconds < 8) return "Thinking...";
+  if (elapsedSeconds < 20) return "Planning the model...";
+  if (elapsedSeconds < 45) return "Generating the model...";
+  if (elapsedSeconds < 75) return "This can take some time...";
+  return "Still generating. Thanks for hanging in there...";
+}
+
+function getCompilingMessage(elapsedSeconds: number) {
+  if (elapsedSeconds < 10) return "Preparing the model...";
+  if (elapsedSeconds < 30) return "Compiling the model...";
+  return "Still compiling the model...";
+}
 
 const REFERENCE_IMAGE_MAX_EDGE = 1024;
 const REFERENCE_IMAGE_MAX_DATA_URL_BYTES = 3 * 1024 * 1024;
@@ -184,6 +204,9 @@ export function AiChatBox({
   const [isPreparingImage, setIsPreparingImage] = useState(false);
   const [jobId, setJobId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingAssistantResponse, setPendingAssistantResponse] =
+    useState<PendingAssistantResponse | null>(null);
+  const [loadingElapsedSeconds, setLoadingElapsedSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -206,6 +229,14 @@ export function AiChatBox({
       .filter((object) => object !== undefined);
   }, [objects, selectedObjectIds]);
 
+  const loadingMessage = useMemo(
+    () =>
+      pendingAssistantResponse
+        ? getCompilingMessage(loadingElapsedSeconds)
+        : getLoadingMessage(loadingElapsedSeconds, jobId),
+    [jobId, loadingElapsedSeconds, pendingAssistantResponse],
+  );
+
   const resizeTextarea = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -224,11 +255,27 @@ export function AiChatBox({
   }, [input, resizeTextarea]);
 
   useEffect(() => {
+    if (!isLoading) {
+      setLoadingElapsedSeconds(0);
+      return;
+    }
+
+    setLoadingElapsedSeconds(0);
+    const intervalId = window.setInterval(() => {
+      setLoadingElapsedSeconds((seconds) => seconds + 1);
+    }, 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [isLoading]);
+
+  useEffect(() => {
     setMessages([]);
     setInput("");
     setReferenceImage(null);
     setJobId(null);
     setIsLoading(false);
+    setPendingAssistantResponse(null);
+    setLoadingElapsedSeconds(0);
     setError(null);
     completedJobIdsRef.current.clear();
     activePollRequestRef.current = false;
@@ -448,12 +495,25 @@ export function AiChatBox({
             (toolCalls.length > 0
               ? toolCalls.map((tc) => `Called ${tc.toolName}`).join(", ") + "."
               : "Done.");
-          setMessages((prev) => [
-            ...prev,
-            { role: "assistant", content: assistantText },
-          ]);
-          setIsLoading(false);
           setJobId(null);
+          const generatedObjectIds = toolCalls
+            .filter((tc) => tc.toolName === "generate_openscad_object")
+            .map((tc) => tc.args.id)
+            .filter((id): id is string => typeof id === "string");
+
+          if (generatedObjectIds.length > 0) {
+            setLoadingElapsedSeconds(0);
+            setPendingAssistantResponse({
+              text: assistantText,
+              generatedObjectIds,
+            });
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", content: assistantText },
+            ]);
+            setIsLoading(false);
+          }
         } else if (data.status === "error") {
           clearInterval(intervalId);
           const msg = data.error ?? "Something went wrong";
@@ -476,6 +536,32 @@ export function AiChatBox({
     return () => clearInterval(intervalId);
   }, [jobId, executeToolCall]);
 
+  useEffect(() => {
+    if (!pendingAssistantResponse) return;
+
+    const generatedObjects = pendingAssistantResponse.generatedObjectIds
+      .map((id) => objects.find((object) => object.id === id))
+      .filter((object) => object !== undefined);
+
+    if (generatedObjects.length < pendingAssistantResponse.generatedObjectIds.length) {
+      return;
+    }
+
+    const isCompileFinished = generatedObjects.every(
+      (object) =>
+        object.compileStatus === "ready" || object.compileStatus === "error",
+    );
+
+    if (!isCompileFinished) return;
+
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: pendingAssistantResponse.text },
+    ]);
+    setPendingAssistantResponse(null);
+    setIsLoading(false);
+  }, [objects, pendingAssistantResponse]);
+
   // ---------------------------------------------------------------------------
   // Submit
   // ---------------------------------------------------------------------------
@@ -491,6 +577,8 @@ export function AiChatBox({
     setInput("");
     setReferenceImage(null);
     setError(null);
+    setPendingAssistantResponse(null);
+    setLoadingElapsedSeconds(0);
     setIsLoading(true);
 
     const newMessages: Message[] = [
@@ -696,7 +784,7 @@ export function AiChatBox({
             {isLoading && (
               <div className="flex justify-start">
                 <div className="bg-neutral-800 rounded-lg px-3 py-1.5 text-xs text-neutral-400 animate-pulse">
-                  Thinking...
+                  {loadingMessage}
                 </div>
               </div>
             )}
